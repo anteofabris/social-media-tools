@@ -1,0 +1,197 @@
+const puppeteer = require("puppeteer");
+const minimist = require("minimist");
+
+const argv = minimist(process.argv.slice(2));
+
+// --- Validate CLI args ---
+const { cookie, locations, count = 50 } = argv;
+
+if (!cookie || !locations) {
+  console.error(
+    "Usage: node IG_autofollow_locations.js --cookie <sessionid> --locations 213385402,12345678 [--count 50]"
+  );
+  process.exit(1);
+}
+
+const locationList = String(locations).split(",").map((t) => t.trim()).filter(Boolean);
+const followCount = Number(count);
+
+if (locationList.length === 0) {
+  console.error("Error: provide at least one location ID");
+  process.exit(1);
+}
+
+// --- Helpers ---
+function randomDelay(min = 2000, max = 5000) {
+  const ms = Math.floor(Math.random() * (max - min + 1)) + min;
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function dismissDialogByText(page, buttonTexts) {
+  for (const text of buttonTexts) {
+    try {
+      const btn = await page.evaluateHandle((t) => {
+        const buttons = [...document.querySelectorAll("button")];
+        return buttons.find((b) => b.textContent.trim().toLowerCase().includes(t.toLowerCase()));
+      }, text);
+      if (btn && btn.asElement()) {
+        await btn.asElement().click();
+        await randomDelay(1000, 2000);
+        return true;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return false;
+}
+
+// --- Main ---
+(async () => {
+  const browser = await puppeteer.launch({
+    headless: false,
+    defaultViewport: { width: 1280, height: 900 },
+    args: ["--window-size=1280,900"],
+  });
+
+  const page = await browser.newPage();
+  await page.setUserAgent(
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  );
+
+  let totalFollowed = 0;
+
+  try {
+    // --- Inject session cookie and navigate ---
+    console.log("Setting session cookie...");
+    await page.setCookie({
+      name: "sessionid",
+      value: String(cookie),
+      domain: ".instagram.com",
+      path: "/",
+      httpOnly: true,
+      secure: true,
+      sameSite: "None",
+    });
+
+    console.log("Navigating to Instagram...");
+    await page.goto("https://www.instagram.com/", { waitUntil: "networkidle2" });
+    await randomDelay(2000, 3000);
+
+    // Dismiss cookie consent if present
+    await dismissDialogByText(page, ["allow all cookies", "allow essential and optional cookies", "accept"]);
+    await randomDelay(1000, 2000);
+
+    // Verify we're logged in (no login form visible)
+    const loginForm = await page.$('input[name="username"]');
+    if (loginForm) {
+      throw new Error("Session cookie appears invalid — login form is still visible. Get a fresh sessionid from your browser.");
+    }
+    console.log("Logged in via session cookie.");
+
+    // --- Process each location ---
+    for (const locationId of locationList) {
+      console.log(`\n--- Location: ${locationId} ---`);
+      let locationFollowed = 0;
+
+      try {
+        await page.goto(`https://www.instagram.com/explore/locations/${locationId}/`, {
+          waitUntil: "networkidle2",
+        });
+        await randomDelay(3000, 5000);
+
+        // Wait for post links to appear (posts link to /p/ or /reel/)
+        await page.waitForFunction(
+          () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
+          { timeout: 15000 }
+        );
+
+        // Collect all post links and click into "Most recent" section if possible.
+        // Top posts are usually the first 9; most recent starts after.
+        const postLinks = await page.$$('a[href*="/p/"], a[href*="/reel/"]');
+        if (postLinks.length === 0) {
+          console.log(`  No posts found for location ${locationId}, skipping.`);
+          continue;
+        }
+
+        const targetIndex = postLinks.length > 9 ? 9 : 0;
+        console.log(`  Found ${postLinks.length} posts, clicking post ${targetIndex + 1}...`);
+        await postLinks[targetIndex].click();
+
+        await randomDelay(2000, 3000);
+
+        // --- Follow-and-advance loop ---
+        for (let i = 0; i < followCount; i++) {
+          try {
+            // Look for a "Follow" button inside the post dialog (next to the username)
+            const result = await page.evaluate(() => {
+              const dialog = document.querySelector('[role="dialog"]');
+              if (!dialog) return { found: false };
+              const buttons = [...dialog.querySelectorAll("button")];
+              const followBtn = buttons.find((b) => b.textContent.trim() === "Follow");
+              if (followBtn) {
+                followBtn.click();
+                return { found: true };
+              }
+              return { found: false };
+            });
+
+            if (result.found) {
+              locationFollowed++;
+              totalFollowed++;
+              console.log(`  Post ${i + 1}: followed! (${locationFollowed} for location ${locationId})`);
+            } else {
+              console.log(`  Post ${i + 1}: already following or own post, skipping.`);
+            }
+
+            await randomDelay();
+
+            // Click "Next" arrow to advance to the next post in the lightbox
+            const hasNext = await page.evaluate(() => {
+              const allNextButtons = [
+                ...document.querySelectorAll('button svg[aria-label="Next"]'),
+              ].map((svg) => svg.closest("button"));
+
+              for (const btn of allNextButtons) {
+                const dialog = btn.closest('[role="dialog"]');
+                if (dialog) {
+                  const article = btn.closest("article");
+                  if (!article) {
+                    btn.click();
+                    return true;
+                  }
+                }
+              }
+
+              if (allNextButtons.length > 0) {
+                allNextButtons[allNextButtons.length - 1].click();
+                return true;
+              }
+
+              return false;
+            });
+
+            if (!hasNext) {
+              console.log("  No more posts (Next button not found). Moving on.");
+              break;
+            }
+
+            await randomDelay();
+          } catch (err) {
+            console.log(`  Post ${i + 1}: error — ${err.message}. Continuing...`);
+            await randomDelay(1000, 2000);
+          }
+        }
+
+        console.log(`  Finished location ${locationId}: ${locationFollowed} users followed.`);
+      } catch (err) {
+        console.log(`  Error processing location ${locationId}: ${err.message}. Skipping.`);
+      }
+    }
+  } catch (err) {
+    console.error(`Fatal error: ${err.message}`);
+  } finally {
+    console.log(`\nDone. Total users followed: ${totalFollowed} across ${locationList.length} location(s).`);
+    await browser.close();
+  }
+})();
