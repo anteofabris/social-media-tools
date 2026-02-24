@@ -1,5 +1,6 @@
 const puppeteer = require("puppeteer");
 const minimist = require("minimist");
+const { getAIComment } = require("./gemini_comment");
 
 const argv = minimist(process.argv.slice(2));
 
@@ -15,8 +16,6 @@ if (!cookie || !hashtags) {
 
 const hashtagList = String(hashtags).split(",").map((t) => t.trim()).filter(Boolean);
 const commentCount = Number(count);
-
-const COMMENT_TEXT = "yeah!";
 
 if (hashtagList.length === 0) {
   console.error("Error: provide at least one hashtag");
@@ -183,50 +182,67 @@ async function postComment(page, text) {
         await randomDelay(2000, 3000);
 
         // --- Comment-and-advance loop ---
-        for (let i = 0; i < commentCount; i++) {
+        let noTextareaStreak = 0;
+        const NO_TEXTAREA_LIMIT = 10;
+        let postIndex = 0;
+
+        while (hashtagCommented < commentCount) {
+          postIndex++;
           try {
-            await postComment(page, COMMENT_TEXT);
+            const commentText = await getAIComment(page);
+            await postComment(page, commentText);
             hashtagCommented++;
             totalCommented++;
-            console.log(`  Post ${i + 1}: commented "${COMMENT_TEXT}" (${hashtagCommented} for #${hashtag})`);
-
-            await randomDelay();
-
-            // Click "Next" arrow to advance to the next post in the lightbox
-            const hasNext = await page.evaluate(() => {
-              const allNextButtons = [
-                ...document.querySelectorAll('button svg[aria-label="Next"]'),
-              ].map((svg) => svg.closest("button"));
-
-              for (const btn of allNextButtons) {
-                const dialog = btn.closest('[role="dialog"]');
-                if (dialog) {
-                  const article = btn.closest("article");
-                  if (!article) {
-                    btn.click();
-                    return true;
-                  }
-                }
-              }
-
-              if (allNextButtons.length > 0) {
-                allNextButtons[allNextButtons.length - 1].click();
-                return true;
-              }
-
-              return false;
-            });
-
-            if (!hasNext) {
-              console.log("  No more posts (Next button not found). Moving on.");
-              break;
-            }
+            noTextareaStreak = 0;
+            console.log(`  Post ${postIndex}: commented "${commentText}" (${hashtagCommented} for #${hashtag})`);
 
             await randomDelay();
           } catch (err) {
-            console.log(`  Post ${i + 1}: error — ${err.message}. Continuing...`);
+            if (err.message.includes("Comment textarea not found")) {
+              noTextareaStreak++;
+              console.log(`  Post ${postIndex}: comment textarea not found (${noTextareaStreak}/${NO_TEXTAREA_LIMIT}). Skipping...`);
+              if (noTextareaStreak >= NO_TEXTAREA_LIMIT) {
+                console.log(`  Reached ${NO_TEXTAREA_LIMIT} consecutive posts without comment textarea. Exiting.`);
+                await browser.close();
+                process.exit(1);
+              }
+            } else {
+              console.log(`  Post ${postIndex}: error — ${err.message}. Continuing...`);
+            }
             await randomDelay(1000, 2000);
           }
+
+          // Click "Next" arrow to advance to the next post in the lightbox
+          const hasNext = await page.evaluate(() => {
+            const allNextButtons = [
+              ...document.querySelectorAll('button svg[aria-label="Next"]'),
+            ].map((svg) => svg.closest("button"));
+
+            for (const btn of allNextButtons) {
+              const dialog = btn.closest('[role="dialog"]');
+              if (dialog) {
+                const article = btn.closest("article");
+                if (!article) {
+                  btn.click();
+                  return true;
+                }
+              }
+            }
+
+            if (allNextButtons.length > 0) {
+              allNextButtons[allNextButtons.length - 1].click();
+              return true;
+            }
+
+            return false;
+          });
+
+          if (!hasNext) {
+            console.log("  No more posts (Next button not found). Moving on.");
+            break;
+          }
+
+          await randomDelay();
         }
 
         console.log(`  Finished #${hashtag}: ${hashtagCommented} posts commented.`);

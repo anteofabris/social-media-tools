@@ -7,6 +7,8 @@
     "start": "node index.js"
   },
   "dependencies": {
+    "@google/genai": "^1.42.0",
+    "dotenv": "^17.3.1",
     "minimist": "^1.2.8",
     "puppeteer": "^24.2.1"
   }
