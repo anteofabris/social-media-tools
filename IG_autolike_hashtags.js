@@ -1,14 +1,16 @@
 const puppeteer = require("puppeteer");
 const minimist = require("minimist");
+require("dotenv").config({ path: __dirname + "/.env" });
 
 const argv = minimist(process.argv.slice(2));
 
 // --- Validate CLI args ---
-const { cookie, hashtags, count = 50 } = argv;
+const { hashtags, count = 50 } = argv;
+const cookie = argv.cookie || process.env.IG_SESSION_COOKIE;
 
 if (!cookie || !hashtags) {
   console.error(
-    "Usage: node index.js --cookie <sessionid> --hashtags tag1,tag2 [--count 50]"
+    "Usage: node IG_autolike_hashtags.js --cookie <sessionid> --hashtags tag1,tag2 [--count 50]"
   );
   process.exit(1);
 }

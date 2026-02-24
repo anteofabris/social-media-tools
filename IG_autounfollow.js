@@ -2,11 +2,13 @@ const puppeteer = require("puppeteer");
 const minimist = require("minimist");
 const fs = require("fs");
 const path = require("path");
+require("dotenv").config({ path: __dirname + "/.env" });
 
 const argv = minimist(process.argv.slice(2));
 
 // --- Validate CLI args ---
-const { cookie, count = 50 } = argv;
+const { count = 50 } = argv;
+const cookie = argv.cookie || process.env.IG_SESSION_COOKIE;
 
 if (!cookie) {
   console.error(

@@ -17,13 +17,21 @@ npm install
 2. Open DevTools > Application > Cookies > `https://www.instagram.com`
 3. Copy the value of the `sessionid` cookie
 
+You can either pass it via `--cookie` each time, or set it once in a `.env` file:
+
+```
+IG_SESSION_COOKIE=your_sessionid_here
+```
+
+The `--cookie` flag takes priority if both are provided.
+
 ## Scripts
 
 All scripts share these common flags:
 
 | Flag | Description |
 |------|-------------|
-| `--cookie <sessionid>` | **(required)** Your Instagram session cookie |
+| `--cookie <sessionid>` | Your Instagram session cookie (falls back to `IG_SESSION_COOKIE` in `.env`) |
 | `--count <n>` | Number of actions to perform (default: `50`) |
 
 ### Likes
