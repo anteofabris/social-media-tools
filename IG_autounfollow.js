@@ -1,5 +1,7 @@
 const puppeteer = require("puppeteer");
 const minimist = require("minimist");
+const fs = require("fs");
+const path = require("path");
 
 const argv = minimist(process.argv.slice(2));
 
@@ -8,12 +10,40 @@ const { cookie, count = 50 } = argv;
 
 if (!cookie) {
   console.error(
-    "Usage: node IG_autounfollow.js --cookie <sessionid> [--count 50]"
+    "Usage: node IG_autounfollow.js --cookie <sessionid> [--count 50] [--skip user1,user2]"
   );
   process.exit(1);
 }
 
 const unfollowCount = Number(count);
+
+// --- Load skip list ---
+let fileSkipList = [];
+try {
+  const skipFilePath = path.join(__dirname, "skip_accounts.json");
+  const raw = fs.readFileSync(skipFilePath, "utf-8");
+  fileSkipList = JSON.parse(raw);
+  if (!Array.isArray(fileSkipList)) {
+    console.warn("Warning: skip_accounts.json is not an array. Defaulting to empty skip list.");
+    fileSkipList = [];
+  }
+} catch (err) {
+  if (err.code === "ENOENT") {
+    console.warn("Warning: skip_accounts.json not found. No file-based skip list loaded.");
+  } else {
+    console.warn(`Warning: Could not parse skip_accounts.json: ${err.message}. Defaulting to empty skip list.`);
+  }
+}
+
+const cliSkipRaw = argv.skip ? String(argv.skip).split(",").map((s) => s.trim()).filter(Boolean) : [];
+const skipSet = new Set([
+  ...fileSkipList.map((u) => String(u).toLowerCase()),
+  ...cliSkipRaw.map((u) => u.toLowerCase()),
+]);
+
+console.log(
+  `Loaded ${skipSet.size} skip accounts (${fileSkipList.length} from file, ${cliSkipRaw.length} from CLI)`
+);
 
 // --- Helpers ---
 function randomDelay(min = 2000, max = 5000) {
@@ -137,23 +167,44 @@ async function dismissDialogByText(page, buttonTexts) {
 
     for (let i = 0; i < unfollowCount; i++) {
       try {
-        // Find a "Following" button inside the dialog's list
-        const foundFollowing = await page.evaluate(() => {
+        // Find a "Following" button inside the dialog's list, skipping protected accounts
+        const skipArray = [...skipSet];
+        const foundFollowing = await page.evaluate((skipList) => {
+          const skipLower = new Set(skipList);
           const dialogs = document.querySelectorAll('[role="dialog"]');
           for (const dialog of dialogs) {
             const buttons = [...dialog.querySelectorAll("button")];
-            const followingBtn = buttons.find((b) => b.textContent.trim() === "Following");
-            if (followingBtn) {
-              followingBtn.click();
-              return true;
+            const followingBtns = buttons.filter((b) => b.textContent.trim() === "Following");
+            for (const btn of followingBtns) {
+              // Walk up from the button to find the nearest list item container, then look for a link with the username
+              let container = btn.closest("li") || btn.parentElement?.parentElement?.parentElement;
+              let username = null;
+              if (container) {
+                const link = container.querySelector('a[href*="/"]');
+                if (link) {
+                  const href = link.getAttribute("href");
+                  const match = href.match(/^\/([a-zA-Z0-9._]+)\/?$/);
+                  if (match) username = match[1];
+                }
+                if (!username) {
+                  const span = container.querySelector("span");
+                  if (span) username = span.textContent.trim();
+                }
+              }
+              const userLower = username ? username.toLowerCase() : null;
+              if (userLower && skipLower.has(userLower)) {
+                continue; // skip protected account
+              }
+              btn.click();
+              return { found: true, username: username || "(unknown)" };
             }
           }
-          return false;
-        });
+          return { found: false, username: null };
+        }, skipArray);
 
-        if (!foundFollowing) {
+        if (!foundFollowing.found) {
           // Try scrolling the dialog's scrollable container to load more
-          console.log("  No 'Following' buttons visible, scrolling to load more...");
+          console.log("  No eligible 'Following' buttons visible, scrolling to load more...");
           await page.evaluate(() => {
             const dialogs = document.querySelectorAll('[role="dialog"]');
             for (const dialog of dialogs) {
@@ -167,24 +218,46 @@ async function dismissDialogByText(page, buttonTexts) {
           });
           await randomDelay(2000, 3000);
 
-          // Retry finding a "Following" button after scroll
-          const retryFound = await page.evaluate(() => {
+          // Retry finding a "Following" button after scroll, still respecting skip list
+          const retryFound = await page.evaluate((skipList) => {
+            const skipLower = new Set(skipList);
             const dialogs = document.querySelectorAll('[role="dialog"]');
             for (const dialog of dialogs) {
               const buttons = [...dialog.querySelectorAll("button")];
-              const followingBtn = buttons.find((b) => b.textContent.trim() === "Following");
-              if (followingBtn) {
-                followingBtn.click();
-                return true;
+              const followingBtns = buttons.filter((b) => b.textContent.trim() === "Following");
+              for (const btn of followingBtns) {
+                let container = btn.closest("li") || btn.parentElement?.parentElement?.parentElement;
+                let username = null;
+                if (container) {
+                  const link = container.querySelector('a[href*="/"]');
+                  if (link) {
+                    const href = link.getAttribute("href");
+                    const match = href.match(/^\/([a-zA-Z0-9._]+)\/?$/);
+                    if (match) username = match[1];
+                  }
+                  if (!username) {
+                    const span = container.querySelector("span");
+                    if (span) username = span.textContent.trim();
+                  }
+                }
+                const userLower = username ? username.toLowerCase() : null;
+                if (userLower && skipLower.has(userLower)) {
+                  continue;
+                }
+                btn.click();
+                return { found: true, username: username || "(unknown)" };
               }
             }
-            return false;
-          });
+            return { found: false, username: null };
+          }, skipArray);
 
-          if (!retryFound) {
-            console.log("  No more 'Following' buttons found after scrolling. End of list.");
+          if (!retryFound.found) {
+            console.log("  No more eligible 'Following' buttons found after scrolling. End of list.");
             break;
           }
+          console.log(`  Unfollowing: ${retryFound.username}`);
+        } else {
+          console.log(`  Unfollowing: ${foundFollowing.username}`);
         }
 
         await randomDelay(1000, 2000);
