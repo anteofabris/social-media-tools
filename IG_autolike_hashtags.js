@@ -111,17 +111,24 @@ async function dismissDialogByText(page, buttonTexts) {
 
         const targetIndex = postLinks.length > 9 ? 9 : 0;
         console.log(`  Found ${postLinks.length} posts, clicking post ${targetIndex + 1}...`);
+        // Set up navigation listener before clicking (handles full-page navigation for Reels)
+        const navPromise = page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }).catch(() => null);
+
         await postLinks[targetIndex].click();
 
-        // Wait for the post lightbox to fully load
+        // Wait for the post to load — either as a lightbox or after full-page navigation
         console.log("  Waiting for post to load...");
         try {
-          await page.waitForFunction(
-            () => !!document.querySelector('[role="dialog"] article'),
-            { timeout: 10000 }
-          );
+          await Promise.race([
+            navPromise,
+            page.waitForFunction(
+              () => !!document.querySelector('[role="dialog"] article'),
+              { timeout: 10000 }
+            ),
+          ]);
         } catch {
-          // Timeout — continue anyway
+          // waitForFunction failed (frame detached during navigation) — wait for navigation to finish
+          await navPromise;
         }
         await randomDelay(1000, 2000);
 

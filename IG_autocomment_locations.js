@@ -173,17 +173,24 @@ async function postComment(page, text) {
 
         const targetIndex = postLinks.length > 9 ? 9 : 0;
         console.log(`  Found ${postLinks.length} posts, clicking post ${targetIndex + 1}...`);
+        // Set up navigation listener before clicking (handles full-page navigation for Reels)
+        const navPromise = page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }).catch(() => null);
+
         await postLinks[targetIndex].click();
 
-        // Wait for the post lightbox to fully load
+        // Wait for the post to load — either as a lightbox or after full-page navigation
         console.log("  Waiting for post to load...");
         try {
-          await page.waitForFunction(
-            () => !!document.querySelector('[role="dialog"] article'),
-            { timeout: 10000 }
-          );
+          await Promise.race([
+            navPromise,
+            page.waitForFunction(
+              () => !!document.querySelector('[role="dialog"] article'),
+              { timeout: 10000 }
+            ),
+          ]);
         } catch {
-          // Timeout — continue anyway
+          // waitForFunction failed (frame detached during navigation) — wait for navigation to finish
+          await navPromise;
         }
         await randomDelay(1000, 2000);
 
@@ -213,51 +220,56 @@ async function postComment(page, text) {
             await randomDelay(1000, 2000);
           }
 
-          // Capture current URL before advancing to detect when the new post loads
-          const prevUrl = page.url();
+          // Advance to the next post — wrapped in try/catch since the frame may be detached
+          try {
+            const prevUrl = page.url();
 
-          // Click "Next" arrow to advance to the next post in the lightbox
-          const hasNext = await page.evaluate(() => {
-            const allNextButtons = [
-              ...document.querySelectorAll('button svg[aria-label="Next"]'),
-            ].map((svg) => svg.closest("button"));
+            // Click "Next" arrow to advance to the next post in the lightbox
+            const hasNext = await page.evaluate(() => {
+              const allNextButtons = [
+                ...document.querySelectorAll('button svg[aria-label="Next"]'),
+              ].map((svg) => svg.closest("button"));
 
-            for (const btn of allNextButtons) {
-              const dialog = btn.closest('[role="dialog"]');
-              if (dialog) {
-                const article = btn.closest("article");
-                if (!article) {
-                  btn.click();
-                  return true;
+              for (const btn of allNextButtons) {
+                const dialog = btn.closest('[role="dialog"]');
+                if (dialog) {
+                  const article = btn.closest("article");
+                  if (!article) {
+                    btn.click();
+                    return true;
+                  }
                 }
               }
+
+              if (allNextButtons.length > 0) {
+                allNextButtons[allNextButtons.length - 1].click();
+                return true;
+              }
+
+              return false;
+            });
+
+            if (!hasNext) {
+              console.log("  No more posts (Next button not found). Moving on.");
+              break;
             }
 
-            if (allNextButtons.length > 0) {
-              allNextButtons[allNextButtons.length - 1].click();
-              return true;
+            // Wait for the new post to fully load before continuing
+            console.log("  Waiting for next post to load...");
+            try {
+              await page.waitForFunction(
+                (prev) => window.location.href !== prev && !!document.querySelector('[role="dialog"] article'),
+                { timeout: 10000 },
+                prevUrl
+              );
+            } catch {
+              // Timeout — continue anyway, the next action will catch if frame is still detached
             }
-
-            return false;
-          });
-
-          if (!hasNext) {
-            console.log("  No more posts (Next button not found). Moving on.");
+            await randomDelay(1000, 2000);
+          } catch (err) {
+            console.log(`  Cannot advance to next post: ${err.message}. Moving on.`);
             break;
           }
-
-          // Wait for the new post to fully load before continuing
-          console.log("  Waiting for next post to load...");
-          try {
-            await page.waitForFunction(
-              (prev) => window.location.href !== prev && !!document.querySelector('[role="dialog"] article'),
-              { timeout: 10000 },
-              prevUrl
-            );
-          } catch {
-            // Timeout — continue anyway, the next action will catch if frame is still detached
-          }
-          await randomDelay(1000, 2000);
         }
 
         console.log(`  Finished location ${locationId}: ${locationCommented} posts commented.`);
