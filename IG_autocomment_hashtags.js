@@ -1,5 +1,5 @@
-const puppeteer = require("puppeteer");
 const minimist = require("minimist");
+const { connectBrowser } = require("./browser");
 const { getAIComment } = require("./gemini_comment");
 require("dotenv").config({ path: __dirname + "/.env" });
 
@@ -111,18 +111,10 @@ async function postComment(page, text) {
 
 // --- Main ---
 (async () => {
-  const browser = await puppeteer.launch({
-    headless: true,
-    defaultViewport: { width: 1280, height: 900 },
-    args: ["--window-size=1280,900"],
-  });
-
-  const page = await browser.newPage();
-  await page.setUserAgent(
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-  );
+  const { browser, page } = await connectBrowser();
 
   let totalCommented = 0;
+  const result = { success: true, action: "autocomment_hashtags", hashtags: hashtagList, requested: commentCount, totalCommented: 0, details: [], error: null };
 
   try {
     // --- Inject session cookie and navigate ---
@@ -156,6 +148,7 @@ async function postComment(page, text) {
     for (const hashtag of hashtagList) {
       console.log(`\n--- Hashtag: #${hashtag} ---`);
       let hashtagCommented = 0;
+      const comments = [];
 
       try {
         await page.goto(`https://www.instagram.com/explore/tags/${hashtag}/`, {
@@ -196,6 +189,7 @@ async function postComment(page, text) {
             hashtagCommented++;
             totalCommented++;
             noTextareaStreak = 0;
+            comments.push(commentText);
             console.log(`  Post ${postIndex}: commented "${commentText}" (${hashtagCommented} for #${hashtag})`);
 
             await randomDelay();
@@ -204,9 +198,7 @@ async function postComment(page, text) {
               noTextareaStreak++;
               console.log(`  Post ${postIndex}: comment textarea not found (${noTextareaStreak}/${NO_TEXTAREA_LIMIT}). Skipping...`);
               if (noTextareaStreak >= NO_TEXTAREA_LIMIT) {
-                console.log(`  Reached ${NO_TEXTAREA_LIMIT} consecutive posts without comment textarea. Exiting.`);
-                await browser.close();
-                process.exit(1);
+                throw new Error(`Reached ${NO_TEXTAREA_LIMIT} consecutive posts without comment textarea`);
               }
             } else {
               console.log(`  Post ${postIndex}: error — ${err.message}. Continuing...`);
@@ -248,14 +240,18 @@ async function postComment(page, text) {
         }
 
         console.log(`  Finished #${hashtag}: ${hashtagCommented} posts commented.`);
+        result.details.push({ hashtag, commented: hashtagCommented, comments });
       } catch (err) {
         console.log(`  Error processing #${hashtag}: ${err.message}. Skipping.`);
+        result.details.push({ hashtag, commented: hashtagCommented, comments, error: err.message });
       }
     }
   } catch (err) {
-    console.error(`Fatal error: ${err.message}`);
+    result.success = false;
+    result.error = err.message;
   } finally {
-    console.log(`\nDone. Total posts commented: ${totalCommented} across ${hashtagList.length} hashtag(s).`);
+    result.totalCommented = totalCommented;
+    console.log(JSON.stringify(result));
     await browser.close();
   }
 })();

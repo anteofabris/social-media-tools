@@ -1,5 +1,5 @@
-const puppeteer = require("puppeteer");
 const minimist = require("minimist");
+const { connectBrowser } = require("./browser");
 require("dotenv").config({ path: __dirname + "/.env" });
 
 const argv = minimist(process.argv.slice(2));
@@ -50,18 +50,10 @@ async function dismissDialogByText(page, buttonTexts) {
 
 // --- Main ---
 (async () => {
-  const browser = await puppeteer.launch({
-    headless: true,
-    defaultViewport: { width: 1280, height: 900 },
-    args: ["--window-size=1280,900"],
-  });
-
-  const page = await browser.newPage();
-  await page.setUserAgent(
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-  );
+  const { browser, page } = await connectBrowser();
 
   let totalLiked = 0;
+  const result = { success: true, action: "autolike_locations", locations: locationList, requested: likeCount, totalLiked: 0, details: [], error: null };
 
   try {
     // --- Inject session cookie and navigate ---
@@ -191,14 +183,18 @@ async function dismissDialogByText(page, buttonTexts) {
         }
 
         console.log(`  Finished location ${locationId}: ${locationLiked} posts liked.`);
+        result.details.push({ location: locationId, liked: locationLiked });
       } catch (err) {
         console.log(`  Error processing location ${locationId}: ${err.message}. Skipping.`);
+        result.details.push({ location: locationId, liked: locationLiked, error: err.message });
       }
     }
   } catch (err) {
-    console.error(`Fatal error: ${err.message}`);
+    result.success = false;
+    result.error = err.message;
   } finally {
-    console.log(`\nDone. Total posts liked: ${totalLiked} across ${locationList.length} location(s).`);
+    result.totalLiked = totalLiked;
+    console.log(JSON.stringify(result));
     await browser.close();
   }
 })();

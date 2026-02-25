@@ -1,5 +1,5 @@
-const puppeteer = require("puppeteer");
 const minimist = require("minimist");
+const { connectBrowser } = require("./browser");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config({ path: __dirname + "/.env" });
@@ -74,18 +74,10 @@ async function dismissDialogByText(page, buttonTexts) {
 
 // --- Main ---
 (async () => {
-  const browser = await puppeteer.launch({
-    headless: true,
-    defaultViewport: { width: 1280, height: 900 },
-    args: ["--window-size=1280,900"],
-  });
-
-  const page = await browser.newPage();
-  await page.setUserAgent(
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-  );
+  const { browser, page } = await connectBrowser();
 
   let totalUnfollowed = 0;
+  const result = { success: true, action: "autounfollow", requested: unfollowCount, totalUnfollowed: 0, unfollowed: [], skipped: [], skipListSize: skipSet.size, error: null };
 
   try {
     // --- Inject session cookie and navigate ---
@@ -170,6 +162,7 @@ async function dismissDialogByText(page, buttonTexts) {
     for (let i = 0; i < unfollowCount; i++) {
       try {
         // Find a "Following" button inside the dialog's list, skipping protected accounts
+        let unfollowTarget = null;
         const skipArray = [...skipSet];
         const foundFollowing = await page.evaluate((skipList) => {
           const skipLower = new Set(skipList);
@@ -195,7 +188,7 @@ async function dismissDialogByText(page, buttonTexts) {
               }
               const userLower = username ? username.toLowerCase() : null;
               if (userLower && skipLower.has(userLower)) {
-                continue; // skip protected account
+                continue;
               }
               btn.click();
               return { found: true, username: username || "(unknown)" };
@@ -258,8 +251,10 @@ async function dismissDialogByText(page, buttonTexts) {
             break;
           }
           console.log(`  Unfollowing: ${retryFound.username}`);
+          unfollowTarget = retryFound.username || "(unknown)";
         } else {
           console.log(`  Unfollowing: ${foundFollowing.username}`);
+          unfollowTarget = foundFollowing.username || "(unknown)";
         }
 
         await randomDelay(1000, 2000);
@@ -270,15 +265,14 @@ async function dismissDialogByText(page, buttonTexts) {
           console.log(`  Unfollow ${i + 1}: confirmation dialog not found. Skipping.`);
           consecutiveFailures++;
           if (consecutiveFailures >= FAILURE_LIMIT) {
-            console.log(`  Reached ${FAILURE_LIMIT} consecutive failures. Exiting.`);
-            await browser.close();
-            process.exit(1);
+            throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
           }
           continue;
         }
 
         totalUnfollowed++;
         consecutiveFailures = 0;
+        if (unfollowTarget) result.unfollowed.push(unfollowTarget);
         console.log(`  Unfollowed ${totalUnfollowed}/${unfollowCount}`);
 
         await randomDelay();
@@ -286,17 +280,17 @@ async function dismissDialogByText(page, buttonTexts) {
         console.log(`  Unfollow ${i + 1}: error — ${err.message}. Continuing...`);
         consecutiveFailures++;
         if (consecutiveFailures >= FAILURE_LIMIT) {
-          console.log(`  Reached ${FAILURE_LIMIT} consecutive failures. Exiting.`);
-          await browser.close();
-          process.exit(1);
+          throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
         }
         await randomDelay(1000, 2000);
       }
     }
   } catch (err) {
-    console.error(`Fatal error: ${err.message}`);
+    result.success = false;
+    result.error = err.message;
   } finally {
-    console.log(`\nDone. Total users unfollowed: ${totalUnfollowed}.`);
+    result.totalUnfollowed = totalUnfollowed;
+    console.log(JSON.stringify(result));
     await browser.close();
   }
 })();

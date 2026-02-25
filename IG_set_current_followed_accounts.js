@@ -1,5 +1,5 @@
-const puppeteer = require("puppeteer");
 const minimist = require("minimist");
+const { connectBrowser } = require("./browser");
 const fs = require("fs");
 const path = require("path");
 require("dotenv").config({ path: __dirname + "/.env" });
@@ -45,16 +45,9 @@ async function dismissDialogByText(page, buttonTexts) {
 
 // --- Main ---
 (async () => {
-  const browser = await puppeteer.launch({
-    headless: true,
-    defaultViewport: { width: 1280, height: 900 },
-    args: ["--window-size=1280,900"],
-  });
+  const { browser, page } = await connectBrowser();
 
-  const page = await browser.newPage();
-  await page.setUserAgent(
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-  );
+  const result = { success: true, action: "set_followed_accounts", expectedCount: null, accountsFound: 0, accountsWritten: 0, newAccounts: 0, accounts: [], error: null };
 
   try {
     // --- Inject session cookie and navigate ---
@@ -119,6 +112,7 @@ async function dismissDialogByText(page, buttonTexts) {
 
     if (expectedCount !== null) {
       console.log(`Profile says you are following ${expectedCount} accounts.`);
+      result.expectedCount = expectedCount;
     } else {
       console.warn("Warning: Could not read following count from profile page.");
     }
@@ -264,12 +258,20 @@ async function dismissDialogByText(page, buttonTexts) {
 
     const newFromScrape = sortedUsernames.length - existingList.length;
     fs.writeFileSync(skipFilePath, JSON.stringify(sortedUsernames, null, 2) + "\n", "utf-8");
+
+    result.accountsFound = collectedUsernames.size;
+    result.accountsWritten = sortedUsernames.length;
+    result.newAccounts = newFromScrape > 0 ? newFromScrape : 0;
+    result.accounts = sortedUsernames;
+
     console.log(
       `Wrote ${sortedUsernames.length} usernames to ${skipFilePath} (${existingList.length} existing + ${newFromScrape > 0 ? newFromScrape : 0} new)`
     );
   } catch (err) {
-    console.error(`Fatal error: ${err.message}`);
+    result.success = false;
+    result.error = err.message;
   } finally {
+    console.log(JSON.stringify(result));
     await browser.close();
   }
 })();
