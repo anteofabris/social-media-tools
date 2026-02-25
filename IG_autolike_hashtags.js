@@ -113,7 +113,17 @@ async function dismissDialogByText(page, buttonTexts) {
         console.log(`  Found ${postLinks.length} posts, clicking post ${targetIndex + 1}...`);
         await postLinks[targetIndex].click();
 
-        await randomDelay(2000, 3000);
+        // Wait for the post lightbox to fully load
+        console.log("  Waiting for post to load...");
+        try {
+          await page.waitForFunction(
+            () => !!document.querySelector('[role="dialog"] article'),
+            { timeout: 10000 }
+          );
+        } catch {
+          // Timeout — continue anyway
+        }
+        await randomDelay(1000, 2000);
 
         // --- Like-and-advance loop ---
         let consecutiveFailures = 0;
