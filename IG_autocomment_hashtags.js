@@ -140,6 +140,31 @@ async function postComment(page, text) {
   await randomDelay(2000, 3000);
 }
 
+async function getPostOwner(page) {
+  try {
+    return await page.evaluate(() => {
+      const dialog = document.querySelector('[role="dialog"]');
+      const container = dialog || document;
+      const article = container.querySelector('article');
+      if (!article) return null;
+      const links = article.querySelectorAll('header a[href]');
+      for (const link of links) {
+        const match = link.getAttribute('href').match(/^\/([a-zA-Z0-9._]+)\/?$/);
+        if (match) return match[1];
+      }
+      for (const link of article.querySelectorAll('a[href]')) {
+        const href = link.getAttribute('href');
+        if (href.includes('/p/') || href.includes('/reel/') || href.includes('/explore/') || href.includes('/accounts/')) continue;
+        const match = href.match(/^\/([a-zA-Z0-9._]+)\/?$/);
+        if (match) return match[1];
+      }
+      return null;
+    });
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Navigate to the explore page and return fresh post paths.
  */
@@ -278,6 +303,7 @@ async function loadExplorePage(page, hashtag) {
             await dismissDialogByText(page, ["not now", "cancel"]);
 
             // --- 4. Comment ---
+            const owner = await getPostOwner(page);
             const commentText = await getAIComment(page);
             await postComment(page, commentText);
 
@@ -286,7 +312,7 @@ async function loadExplorePage(page, hashtag) {
             consecutiveFailures = 0;
             comments.push(commentText);
             console.log(
-              `  Post ${startIndex + i + 1}: commented "${commentText}" (${hashtagCommented}/${commentCount} for #${hashtag})`
+              `  Post ${startIndex + i + 1}: commented on @${owner || "unknown"} "${commentText}" (${hashtagCommented}/${commentCount} for #${hashtag})`
             );
 
             // --- 5. Close lightbox (or flag for re-nav) ---

@@ -48,6 +48,31 @@ async function dismissDialogByText(page, buttonTexts) {
   return false;
 }
 
+async function getPostOwner(page) {
+  try {
+    return await page.evaluate(() => {
+      const dialog = document.querySelector('[role="dialog"]');
+      const container = dialog || document;
+      const article = container.querySelector('article');
+      if (!article) return null;
+      const links = article.querySelectorAll('header a[href]');
+      for (const link of links) {
+        const match = link.getAttribute('href').match(/^\/([a-zA-Z0-9._]+)\/?$/);
+        if (match) return match[1];
+      }
+      for (const link of article.querySelectorAll('a[href]')) {
+        const href = link.getAttribute('href');
+        if (href.includes('/p/') || href.includes('/reel/') || href.includes('/explore/') || href.includes('/accounts/')) continue;
+        const match = href.match(/^\/([a-zA-Z0-9._]+)\/?$/);
+        if (match) return match[1];
+      }
+      return null;
+    });
+  } catch {
+    return null;
+  }
+}
+
 // --- Main ---
 (async () => {
   let browser, page;
@@ -151,13 +176,15 @@ async function dismissDialogByText(page, buttonTexts) {
               return { found: false };
             });
 
+            const owner = await getPostOwner(page);
+
             if (result.found) {
               hashtagFollowed++;
               totalFollowed++;
               consecutiveFailures = 0;
-              console.log(`  Post ${i + 1}: followed! (${hashtagFollowed} for #${hashtag})`);
+              console.log(`  Post ${i + 1}: followed @${owner || "unknown"} (${hashtagFollowed} for #${hashtag})`);
             } else {
-              console.log(`  Post ${i + 1}: already following or own post, skipping.`);
+              console.log(`  Post ${i + 1}: already following @${owner || "unknown"}, skipping.`);
             }
 
             await randomDelay();
