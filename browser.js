@@ -3,9 +3,15 @@ const puppeteer = require("puppeteer");
 const BROWSER_WS = process.env.BROWSERLESS_WS || "ws://browserless:3000";
 
 async function connectBrowser() {
-  const browser = await puppeteer.connect({
-    browserWSEndpoint: BROWSER_WS,
-  });
+  let browser;
+  try {
+    browser = await puppeteer.connect({
+      browserWSEndpoint: BROWSER_WS,
+    });
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    throw new Error(`Failed to connect to browserless at ${BROWSER_WS}: ${msg}`);
+  }
 
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900 });

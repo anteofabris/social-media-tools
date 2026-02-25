@@ -111,12 +111,13 @@ async function postComment(page, text) {
 
 // --- Main ---
 (async () => {
-  const { browser, page } = await connectBrowser();
-
+  let browser, page;
   let totalCommented = 0;
   const result = { success: true, action: "autocomment_hashtags", hashtags: hashtagList, requested: commentCount, totalCommented: 0, details: [], error: null };
 
   try {
+    ({ browser, page } = await connectBrowser());
+
     // --- Inject session cookie and navigate ---
     console.log("Setting session cookie...");
     await page.setCookie({
@@ -248,6 +249,6 @@ async function postComment(page, text) {
   } finally {
     result.totalCommented = totalCommented;
     console.log(JSON.stringify(result));
-    await browser.close();
+    if (browser) await browser.close();
   }
 })();

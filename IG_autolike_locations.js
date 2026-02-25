@@ -50,12 +50,13 @@ async function dismissDialogByText(page, buttonTexts) {
 
 // --- Main ---
 (async () => {
-  const { browser, page } = await connectBrowser();
-
+  let browser, page;
   let totalLiked = 0;
   const result = { success: true, action: "autolike_locations", locations: locationList, requested: likeCount, totalLiked: 0, details: [], error: null };
 
   try {
+    ({ browser, page } = await connectBrowser());
+
     // --- Inject session cookie and navigate ---
     console.log("Setting session cookie...");
     await page.setCookie({
@@ -203,6 +204,6 @@ async function dismissDialogByText(page, buttonTexts) {
   } finally {
     result.totalLiked = totalLiked;
     console.log(JSON.stringify(result));
-    await browser.close();
+    if (browser) await browser.close();
   }
 })();

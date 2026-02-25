@@ -45,11 +45,12 @@ async function dismissDialogByText(page, buttonTexts) {
 
 // --- Main ---
 (async () => {
-  const { browser, page } = await connectBrowser();
-
+  let browser, page;
   const result = { success: true, action: "set_followed_accounts", expectedCount: null, accountsFound: 0, accountsWritten: 0, newAccounts: 0, accounts: [], error: null };
 
   try {
+    ({ browser, page } = await connectBrowser());
+
     // --- Inject session cookie and navigate ---
     console.log("Setting session cookie...");
     await page.setCookie({
@@ -272,6 +273,6 @@ async function dismissDialogByText(page, buttonTexts) {
     result.error = err.message;
   } finally {
     console.log(JSON.stringify(result));
-    await browser.close();
+    if (browser) await browser.close();
   }
 })();

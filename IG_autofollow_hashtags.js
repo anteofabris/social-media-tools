@@ -50,12 +50,13 @@ async function dismissDialogByText(page, buttonTexts) {
 
 // --- Main ---
 (async () => {
-  const { browser, page } = await connectBrowser();
-
+  let browser, page;
   let totalFollowed = 0;
   const result = { success: true, action: "autofollow_hashtags", hashtags: hashtagList, requested: followCount, totalFollowed: 0, details: [], error: null };
 
   try {
+    ({ browser, page } = await connectBrowser());
+
     // --- Inject session cookie and navigate ---
     console.log("Setting session cookie...");
     await page.setCookie({
@@ -198,6 +199,6 @@ async function dismissDialogByText(page, buttonTexts) {
   } finally {
     result.totalFollowed = totalFollowed;
     console.log(JSON.stringify(result));
-    await browser.close();
+    if (browser) await browser.close();
   }
 })();
