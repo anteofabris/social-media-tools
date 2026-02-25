@@ -203,6 +203,7 @@ async function dismissDialogByText(page, buttonTexts) {
             }
 
             // Wait for the new post to fully load before continuing
+            console.log("  Waiting for next post to load...");
             try {
               await page.waitForFunction(
                 (prev) => window.location.href !== prev && !!document.querySelector('[role="dialog"] article'),

@@ -237,6 +237,7 @@ async function postComment(page, text) {
           }
 
           // Wait for the new post to fully load before continuing
+          console.log("  Waiting for next post to load...");
           try {
             await page.waitForFunction(
               (prev) => window.location.href !== prev && !!document.querySelector('[role="dialog"] article'),
