@@ -203,6 +203,9 @@ async function postComment(page, text) {
             await randomDelay(1000, 2000);
           }
 
+          // Capture current URL before advancing to detect when the new post loads
+          const prevUrl = page.url();
+
           // Click "Next" arrow to advance to the next post in the lightbox
           const hasNext = await page.evaluate(() => {
             const allNextButtons = [
@@ -233,7 +236,17 @@ async function postComment(page, text) {
             break;
           }
 
-          await randomDelay();
+          // Wait for the new post to fully load before continuing
+          try {
+            await page.waitForFunction(
+              (prev) => window.location.href !== prev && !!document.querySelector('[role="dialog"] article'),
+              { timeout: 10000 },
+              prevUrl
+            );
+          } catch {
+            // Timeout — continue anyway, the next action will catch if frame is still detached
+          }
+          await randomDelay(1000, 2000);
         }
 
         console.log(`  Finished location ${locationId}: ${locationCommented} posts commented.`);
