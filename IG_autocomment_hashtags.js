@@ -30,6 +30,18 @@ function randomDelay(min = 2000, max = 5000) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function injectCookie(page, cookieValue) {
+  await page.setCookie({
+    name: "sessionid",
+    value: String(cookieValue),
+    domain: ".instagram.com",
+    path: "/",
+    httpOnly: true,
+    secure: true,
+    sameSite: "None",
+  });
+}
+
 async function dismissDialogByText(page, buttonTexts) {
   for (const text of buttonTexts) {
     try {
@@ -49,8 +61,41 @@ async function dismissDialogByText(page, buttonTexts) {
   return false;
 }
 
+/**
+ * Tiered recovery: try to restore a working page/browser connection.
+ *   Tier 1 — page is still alive (no-op).
+ *   Tier 2 — page died, but browser WS is alive → create new page.
+ *   Tier 3 — browser WS died → full reconnect.
+ */
+async function ensureConnection(browser, page, cookieValue) {
+  // Tier 1: page still alive?
+  try {
+    await page.evaluate(() => true);
+    return { browser, page };
+  } catch {
+    console.log("  Page is dead, attempting recovery...");
+  }
+
+  // Tier 2: browser alive? create fresh page
+  try {
+    try { await page.close(); } catch {}
+    const newPage = await createPage(browser);
+    await injectCookie(newPage, cookieValue);
+    console.log("  Created new page on existing browser.");
+    return { browser, page: newPage };
+  } catch {
+    console.log("  Browser connection lost, reconnecting...");
+  }
+
+  // Tier 3: full reconnect
+  try { await browser.close(); } catch {}
+  const conn = await connectBrowser();
+  await injectCookie(conn.page, cookieValue);
+  console.log("  Reconnected to browser.");
+  return conn;
+}
+
 async function postComment(page, text) {
-  // Try multiple selectors for the comment textarea
   const selectors = [
     'textarea[aria-label="Add a comment…"]',
     'textarea[aria-label="Add a comment..."]',
@@ -64,30 +109,24 @@ async function postComment(page, text) {
     textarea = await page.$(sel);
     if (textarea) break;
   }
+  if (!textarea) throw new Error("Comment textarea not found");
 
-  if (!textarea) {
-    throw new Error("Comment textarea not found");
-  }
-
-  // Click to focus the textarea (Instagram may swap it for a larger one on focus)
+  // Click to focus (Instagram swaps the textarea on focus)
   await textarea.click();
   await randomDelay(500, 1000);
 
-  // Re-query after focus — Instagram often replaces the textarea element on click
+  // Re-query after focus
   textarea = null;
   for (const sel of selectors) {
     textarea = await page.$(sel);
     if (textarea) break;
   }
-  if (!textarea) {
-    throw new Error("Comment textarea not found after focus");
-  }
+  if (!textarea) throw new Error("Comment textarea not found after focus");
 
-  // Type the comment
   await textarea.type(text, { delay: 60 });
   await randomDelay(500, 1000);
 
-  // Submit: click the "Post" button that appears next to the textarea
+  // Submit via "Post" button
   const posted = await page.evaluate(() => {
     const buttons = [...document.querySelectorAll("button")];
     const postBtn = buttons.find(
@@ -101,11 +140,9 @@ async function postComment(page, text) {
   });
 
   if (!posted) {
-    // Fallback: press Enter
     await textarea.press("Enter");
   }
 
-  // Wait for comment to be submitted
   await randomDelay(2000, 3000);
 }
 
@@ -113,35 +150,38 @@ async function postComment(page, text) {
 (async () => {
   let browser, page;
   let totalCommented = 0;
-  const result = { success: true, action: "autocomment_hashtags", hashtags: hashtagList, requested: commentCount, totalCommented: 0, details: [], error: null };
+  const result = {
+    success: true,
+    action: "autocomment_hashtags",
+    hashtags: hashtagList,
+    requested: commentCount,
+    totalCommented: 0,
+    details: [],
+    error: null,
+  };
 
   try {
     ({ browser, page } = await connectBrowser());
 
-    // --- Inject session cookie and navigate ---
     console.log("Setting session cookie...");
-    await page.setCookie({
-      name: "sessionid",
-      value: String(cookie),
-      domain: ".instagram.com",
-      path: "/",
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-    });
+    await injectCookie(page, cookie);
 
     console.log("Navigating to Instagram...");
     await page.goto("https://www.instagram.com/", { waitUntil: "networkidle2" });
     await randomDelay(2000, 3000);
 
-    // Dismiss cookie consent if present
-    await dismissDialogByText(page, ["allow all cookies", "allow essential and optional cookies", "accept"]);
+    await dismissDialogByText(page, [
+      "allow all cookies",
+      "allow essential and optional cookies",
+      "accept",
+    ]);
     await randomDelay(1000, 2000);
 
-    // Verify we're logged in (no login form visible)
     const loginForm = await page.$('input[name="username"]');
     if (loginForm) {
-      throw new Error("Session cookie appears invalid — login form is still visible. Get a fresh sessionid from your browser.");
+      throw new Error(
+        "Session cookie appears invalid — login form is still visible. Get a fresh sessionid from your browser."
+      );
     }
     console.log("Logged in via session cookie.");
 
@@ -152,187 +192,116 @@ async function postComment(page, text) {
       const comments = [];
 
       try {
-        await page.goto(`https://www.instagram.com/explore/tags/${hashtag}/`, {
-          waitUntil: "networkidle2",
-        });
+        await page.goto(
+          `https://www.instagram.com/explore/tags/${hashtag}/`,
+          { waitUntil: "networkidle2" }
+        );
         await randomDelay(3000, 5000);
 
-        // Wait for post links to appear (posts link to /p/ or /reel/)
         await page.waitForFunction(
-          () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
+          () =>
+            document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')
+              .length > 0,
           { timeout: 15000 }
         );
 
-        // Collect all post links and click into "Most recent" section if possible.
-        // Top posts are usually the first 9; most recent starts after.
-        const postLinks = await page.$$('a[href*="/p/"], a[href*="/reel/"]');
-        if (postLinks.length === 0) {
+        // --- Collect post URLs as strings (not element handles) ---
+        const postUrls = await page.evaluate(() => {
+          const links = [
+            ...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'),
+          ];
+          return links.map((a) => a.href);
+        });
+
+        if (postUrls.length === 0) {
           console.log(`  No posts found for #${hashtag}, skipping.`);
+          result.details.push({ hashtag, commented: 0, comments });
           continue;
         }
 
-        const targetIndex = postLinks.length > 9 ? 9 : 0;
-        console.log(`  Found ${postLinks.length} posts, clicking post ${targetIndex + 1}...`);
-        // Set up navigation listener before clicking (handles full-page navigation for Reels)
-        const navPromise = page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }).catch(() => null);
+        // Skip top/featured posts (first 9), start from "most recent"
+        const startIndex = postUrls.length > 9 ? 9 : 0;
+        const urls = postUrls.slice(startIndex);
+        console.log(
+          `  Found ${postUrls.length} posts, will comment on up to ${commentCount} starting from post ${startIndex + 1}.`
+        );
 
-        await postLinks[targetIndex].click();
-
-        // Wait for the post to load — either as a lightbox or after full-page navigation
-        console.log("  Waiting for post to load...");
-        try {
-          await Promise.race([
-            navPromise,
-            page.waitForFunction(
-              () => !!document.querySelector('[role="dialog"] article'),
-              { timeout: 10000 }
-            ),
-          ]);
-        } catch {
-          // waitForFunction failed (frame detached during navigation) — wait for navigation to finish
-          await navPromise;
-        }
-        await randomDelay(1000, 2000);
-
-        // --- Comment-and-advance loop ---
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
-        let postIndex = 0;
 
-        while (hashtagCommented < commentCount) {
-          postIndex++;
+        // --- Navigate to each post directly (no lightbox) ---
+        for (let i = 0; i < urls.length && hashtagCommented < commentCount; i++) {
+          const url = urls[i];
+
           try {
+            await page.goto(url, {
+              waitUntil: "networkidle2",
+              timeout: 20000,
+            });
+            await randomDelay(2000, 3000);
+
+            // Wait for the post content to render
+            await page.waitForSelector("article", { timeout: 10000 });
+
+            // Dismiss any overlay dialogs (notifications prompt, etc.)
+            await dismissDialogByText(page, ["not now", "cancel"]);
+
             const commentText = await getAIComment(page);
             await postComment(page, commentText);
+
             hashtagCommented++;
             totalCommented++;
             consecutiveFailures = 0;
             comments.push(commentText);
-            console.log(`  Post ${postIndex}: commented "${commentText}" (${hashtagCommented} for #${hashtag})`);
+            console.log(
+              `  Post ${startIndex + i + 1}: commented "${commentText}" (${hashtagCommented}/${commentCount} for #${hashtag})`
+            );
 
             await randomDelay();
           } catch (err) {
             consecutiveFailures++;
-            console.log(`  Post ${postIndex}: error — ${err.message}. Skipping... (${consecutiveFailures}/${FAILURE_LIMIT})`);
+            console.log(
+              `  Post ${startIndex + i + 1}: error — ${err.message}. (${consecutiveFailures}/${FAILURE_LIMIT})`
+            );
+
             if (consecutiveFailures >= FAILURE_LIMIT) {
-              throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
-            }
-            await randomDelay(1000, 2000);
-          }
-
-          // Check if the frame is alive and advance to the next post.
-          // If the frame is dead (Instagram closed/navigated the page), recover.
-          try {
-            await page.evaluate(() => true);
-
-            // Frame is alive — advance via Next button
-            const prevUrl = page.url();
-            const hasNext = await page.evaluate(() => {
-              const allNextButtons = [
-                ...document.querySelectorAll('button svg[aria-label="Next"]'),
-              ].map((svg) => svg.closest("button"));
-
-              for (const btn of allNextButtons) {
-                const dialog = btn.closest('[role="dialog"]');
-                if (dialog) {
-                  const article = btn.closest("article");
-                  if (!article) {
-                    btn.click();
-                    return true;
-                  }
-                }
-              }
-
-              if (allNextButtons.length > 0) {
-                allNextButtons[allNextButtons.length - 1].click();
-                return true;
-              }
-
-              return false;
-            });
-
-            if (!hasNext) {
-              console.log("  No more posts (Next button not found). Moving on.");
-              break;
-            }
-
-            // Wait for the new post to fully load before continuing
-            console.log("  Waiting for next post to load...");
-            try {
-              await page.waitForFunction(
-                (prev) => window.location.href !== prev && !!document.querySelector('[role="dialog"] article'),
-                { timeout: 10000 },
-                prevUrl
+              throw new Error(
+                `Reached ${FAILURE_LIMIT} consecutive failures`
               );
-            } catch {
-              // Timeout — continue anyway
             }
-            await randomDelay(1000, 2000);
-          } catch {
-            // Frame is dead — recover by creating a fresh page and navigating back
-            console.log("  Page frame lost. Recovering...");
-            try {
-              // Try navigating the existing page back first
-              try {
-                await page.goto(`https://www.instagram.com/explore/tags/${hashtag}/`, {
-                  waitUntil: "networkidle2",
-                });
-              } catch {
-                // Page is truly dead — create a new one
-                console.log("  Creating new page...");
-                try { await page.close(); } catch {}
-                page = await createPage(browser);
-                await page.setCookie({
-                  name: "sessionid",
-                  value: String(cookie),
-                  domain: ".instagram.com",
-                  path: "/",
-                  httpOnly: true,
-                  secure: true,
-                  sameSite: "None",
-                });
-                await page.goto(`https://www.instagram.com/explore/tags/${hashtag}/`, {
-                  waitUntil: "networkidle2",
-                });
-              }
-              await randomDelay(2000, 3000);
 
-              // Re-enter the lightbox at a later post to skip the problematic one
-              const retryLinks = await page.$$('a[href*="/p/"], a[href*="/reel/"]');
-              if (retryLinks.length === 0) {
-                console.log("  No posts found after recovery. Moving on.");
-                break;
-              }
-              const retryIndex = Math.min(targetIndex + postIndex, retryLinks.length - 1);
-              console.log(`  Re-entering lightbox at post ${retryIndex + 1}...`);
-              const retryNav = page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }).catch(() => null);
-              await retryLinks[retryIndex].click();
-              console.log("  Waiting for post to load...");
-              try {
-                await Promise.race([
-                  retryNav,
-                  page.waitForFunction(
-                    () => !!document.querySelector('[role="dialog"] article'),
-                    { timeout: 10000 }
-                  ),
-                ]);
-              } catch {
-                await retryNav;
-              }
-              await randomDelay(1000, 2000);
-              continue; // Try commenting on the new post
-            } catch (recoveryErr) {
-              console.log(`  Recovery failed: ${recoveryErr.message}. Moving on.`);
+            // Ensure we have a working connection for the next post
+            try {
+              ({ browser, page } = await ensureConnection(
+                browser,
+                page,
+                cookie
+              ));
+            } catch (reconnErr) {
+              console.log(
+                `  Cannot recover connection: ${reconnErr.message}. Moving on.`
+              );
               break;
             }
+
+            await randomDelay(2000, 3000);
           }
         }
 
-        console.log(`  Finished #${hashtag}: ${hashtagCommented} posts commented.`);
+        console.log(
+          `  Finished #${hashtag}: ${hashtagCommented} posts commented.`
+        );
         result.details.push({ hashtag, commented: hashtagCommented, comments });
       } catch (err) {
-        console.log(`  Error processing #${hashtag}: ${err.message}. Skipping.`);
-        result.details.push({ hashtag, commented: hashtagCommented, comments, error: err.message });
+        console.log(
+          `  Error processing #${hashtag}: ${err.message}. Skipping.`
+        );
+        result.details.push({
+          hashtag,
+          commented: hashtagCommented,
+          comments,
+          error: err.message,
+        });
       }
     }
   } catch (err) {
