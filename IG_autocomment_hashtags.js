@@ -177,8 +177,8 @@ async function postComment(page, text) {
         await randomDelay(2000, 3000);
 
         // --- Comment-and-advance loop ---
-        let noTextareaStreak = 0;
-        const NO_TEXTAREA_LIMIT = 10;
+        let consecutiveFailures = 0;
+        const FAILURE_LIMIT = 10;
         let postIndex = 0;
 
         while (hashtagCommented < commentCount) {
@@ -188,20 +188,16 @@ async function postComment(page, text) {
             await postComment(page, commentText);
             hashtagCommented++;
             totalCommented++;
-            noTextareaStreak = 0;
+            consecutiveFailures = 0;
             comments.push(commentText);
             console.log(`  Post ${postIndex}: commented "${commentText}" (${hashtagCommented} for #${hashtag})`);
 
             await randomDelay();
           } catch (err) {
-            if (err.message.includes("Comment textarea not found")) {
-              noTextareaStreak++;
-              console.log(`  Post ${postIndex}: comment textarea not found (${noTextareaStreak}/${NO_TEXTAREA_LIMIT}). Skipping...`);
-              if (noTextareaStreak >= NO_TEXTAREA_LIMIT) {
-                throw new Error(`Reached ${NO_TEXTAREA_LIMIT} consecutive posts without comment textarea`);
-              }
-            } else {
-              console.log(`  Post ${postIndex}: error — ${err.message}. Continuing...`);
+            consecutiveFailures++;
+            console.log(`  Post ${postIndex}: error — ${err.message}. Skipping... (${consecutiveFailures}/${FAILURE_LIMIT})`);
+            if (consecutiveFailures >= FAILURE_LIMIT) {
+              throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
             }
             await randomDelay(1000, 2000);
           }

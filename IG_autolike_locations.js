@@ -115,6 +115,9 @@ async function dismissDialogByText(page, buttonTexts) {
         await randomDelay(2000, 3000);
 
         // --- Like-and-advance loop ---
+        let consecutiveFailures = 0;
+        const FAILURE_LIMIT = 10;
+
         for (let i = 0; i < likeCount; i++) {
           try {
             // Check if already liked by looking at the like button SVG's aria-label or fill
@@ -126,7 +129,7 @@ async function dismissDialogByText(page, buttonTexts) {
             });
 
             if (alreadyLiked) {
-              console.log(`  Post ${i + 1}: already liked, skipping.`);
+              console.log(`  Post ${i + 1}: already liked, advancing.`);
             } else {
               // Click the Like button
               await page.evaluate(() => {
@@ -140,6 +143,7 @@ async function dismissDialogByText(page, buttonTexts) {
               });
               locationLiked++;
               totalLiked++;
+              consecutiveFailures = 0;
               console.log(`  Post ${i + 1}: liked! (${locationLiked} for location ${locationId})`);
             }
 
@@ -177,7 +181,11 @@ async function dismissDialogByText(page, buttonTexts) {
 
             await randomDelay();
           } catch (err) {
-            console.log(`  Post ${i + 1}: error — ${err.message}. Continuing...`);
+            consecutiveFailures++;
+            console.log(`  Post ${i + 1}: error — ${err.message}. Skipping... (${consecutiveFailures}/${FAILURE_LIMIT})`);
+            if (consecutiveFailures >= FAILURE_LIMIT) {
+              throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
+            }
             await randomDelay(1000, 2000);
           }
         }

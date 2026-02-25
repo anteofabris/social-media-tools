@@ -115,6 +115,9 @@ async function dismissDialogByText(page, buttonTexts) {
         await randomDelay(2000, 3000);
 
         // --- Follow-and-advance loop ---
+        let consecutiveFailures = 0;
+        const FAILURE_LIMIT = 10;
+
         for (let i = 0; i < followCount; i++) {
           try {
             // Look for a "Follow" button inside the post dialog (next to the username)
@@ -133,6 +136,7 @@ async function dismissDialogByText(page, buttonTexts) {
             if (result.found) {
               hashtagFollowed++;
               totalFollowed++;
+              consecutiveFailures = 0;
               console.log(`  Post ${i + 1}: followed! (${hashtagFollowed} for #${hashtag})`);
             } else {
               console.log(`  Post ${i + 1}: already following or own post, skipping.`);
@@ -172,7 +176,11 @@ async function dismissDialogByText(page, buttonTexts) {
 
             await randomDelay();
           } catch (err) {
-            console.log(`  Post ${i + 1}: error — ${err.message}. Continuing...`);
+            consecutiveFailures++;
+            console.log(`  Post ${i + 1}: error — ${err.message}. Skipping... (${consecutiveFailures}/${FAILURE_LIMIT})`);
+            if (consecutiveFailures >= FAILURE_LIMIT) {
+              throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
+            }
             await randomDelay(1000, 2000);
           }
         }
