@@ -220,6 +220,21 @@ async function postComment(page, text) {
             await randomDelay(1000, 2000);
           }
 
+          // Verify the page frame is still usable before trying to advance
+          // (Instagram may re-render/navigate after a comment is posted)
+          try {
+            await page.evaluate(() => true);
+          } catch {
+            console.log("  Page reloading after action, waiting for recovery...");
+            await randomDelay(3000, 5000);
+            try {
+              await page.evaluate(() => true);
+            } catch {
+              console.log("  Page frame not recoverable. Moving on.");
+              break;
+            }
+          }
+
           // Advance to the next post — wrapped in try/catch since the frame may be detached
           try {
             const prevUrl = page.url();
