@@ -1,5 +1,5 @@
 const minimist = require("minimist");
-const { connectBrowser } = require("./browser");
+const { connectBrowser, createPage } = require("./browser");
 const { getAIComment } = require("./gemini_comment");
 require("dotenv").config({ path: __dirname + "/.env" });
 
@@ -220,26 +220,13 @@ async function postComment(page, text) {
             await randomDelay(1000, 2000);
           }
 
-          // Verify the page frame is still usable before trying to advance
-          // (Instagram may re-render/navigate after a comment is posted)
+          // Check if the frame is alive and advance to the next post.
+          // If the frame is dead (Instagram closed/navigated the page), recover.
           try {
             await page.evaluate(() => true);
-          } catch {
-            console.log("  Page reloading after action, waiting for recovery...");
-            await randomDelay(3000, 5000);
-            try {
-              await page.evaluate(() => true);
-            } catch {
-              console.log("  Page frame not recoverable. Moving on.");
-              break;
-            }
-          }
 
-          // Advance to the next post — wrapped in try/catch since the frame may be detached
-          try {
+            // Frame is alive — advance via Next button
             const prevUrl = page.url();
-
-            // Click "Next" arrow to advance to the next post in the lightbox
             const hasNext = await page.evaluate(() => {
               const allNextButtons = [
                 ...document.querySelectorAll('button svg[aria-label="Next"]'),
@@ -278,12 +265,66 @@ async function postComment(page, text) {
                 prevUrl
               );
             } catch {
-              // Timeout — continue anyway, the next action will catch if frame is still detached
+              // Timeout — continue anyway
             }
             await randomDelay(1000, 2000);
-          } catch (err) {
-            console.log(`  Cannot advance to next post: ${err.message}. Moving on.`);
-            break;
+          } catch {
+            // Frame is dead — recover by creating a fresh page and navigating back
+            console.log("  Page frame lost. Recovering...");
+            try {
+              // Try navigating the existing page back first
+              try {
+                await page.goto(`https://www.instagram.com/explore/locations/${locationId}/`, {
+                  waitUntil: "networkidle2",
+                });
+              } catch {
+                // Page is truly dead — create a new one
+                console.log("  Creating new page...");
+                try { await page.close(); } catch {}
+                page = await createPage(browser);
+                await page.setCookie({
+                  name: "sessionid",
+                  value: String(cookie),
+                  domain: ".instagram.com",
+                  path: "/",
+                  httpOnly: true,
+                  secure: true,
+                  sameSite: "None",
+                });
+                await page.goto(`https://www.instagram.com/explore/locations/${locationId}/`, {
+                  waitUntil: "networkidle2",
+                });
+              }
+              await randomDelay(2000, 3000);
+
+              // Re-enter the lightbox at a later post to skip the problematic one
+              const retryLinks = await page.$$('a[href*="/p/"], a[href*="/reel/"]');
+              if (retryLinks.length === 0) {
+                console.log("  No posts found after recovery. Moving on.");
+                break;
+              }
+              const retryIndex = Math.min(targetIndex + postIndex, retryLinks.length - 1);
+              console.log(`  Re-entering lightbox at post ${retryIndex + 1}...`);
+              const retryNav = page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }).catch(() => null);
+              await retryLinks[retryIndex].click();
+              console.log("  Waiting for post to load...");
+              try {
+                await Promise.race([
+                  retryNav,
+                  page.waitForFunction(
+                    () => !!document.querySelector('[role="dialog"] article'),
+                    { timeout: 10000 }
+                  ),
+                ]);
+              } catch {
+                await retryNav;
+              }
+              await randomDelay(1000, 2000);
+              continue; // Try commenting on the new post
+            } catch (recoveryErr) {
+              console.log(`  Recovery failed: ${recoveryErr.message}. Moving on.`);
+              break;
+            }
           }
         }
 
