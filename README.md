@@ -106,6 +106,7 @@ node IG_autounfollow.js --cookie <sessionid> --count 20
 ## Notes
 
 - All scripts launch a **visible** Chrome window (`headless: false`) so you can monitor what's happening
+- Branch "browserless-workflow" is headless.
 - Random delays are built into every action to mimic human behavior
 - Scripts will stop after a configurable number of consecutive failures (default: 10)
 - Location IDs can be found in the URL when browsing a location page on Instagram (e.g. `instagram.com/explore/locations/213385402/`)

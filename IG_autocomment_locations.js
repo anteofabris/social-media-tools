@@ -112,7 +112,7 @@ async function postComment(page, text) {
 // --- Main ---
 (async () => {
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: true,
     defaultViewport: { width: 1280, height: 900 },
     args: ["--window-size=1280,900"],
   });

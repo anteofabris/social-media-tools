@@ -75,7 +75,7 @@ async function dismissDialogByText(page, buttonTexts) {
 // --- Main ---
 (async () => {
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: true,
     defaultViewport: { width: 1280, height: 900 },
     args: ["--window-size=1280,900"],
   });
