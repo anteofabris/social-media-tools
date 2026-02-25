@@ -1,5 +1,5 @@
 const minimist = require("minimist");
-const { connectBrowser } = require("./browser");
+const { connectBrowser, createPage } = require("./browser");
 require("dotenv").config({ path: __dirname + "/.env" });
 
 const argv = minimist(process.argv.slice(2));
@@ -29,6 +29,18 @@ function randomDelay(min = 2000, max = 5000) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function injectCookie(page, cookieValue) {
+  await page.setCookie({
+    name: "sessionid",
+    value: String(cookieValue),
+    domain: ".instagram.com",
+    path: "/",
+    httpOnly: true,
+    secure: true,
+    sameSite: "None",
+  });
+}
+
 async function dismissDialogByText(page, buttonTexts) {
   for (const text of buttonTexts) {
     try {
@@ -46,6 +58,31 @@ async function dismissDialogByText(page, buttonTexts) {
     }
   }
   return false;
+}
+
+async function ensureConnection(browser, page, cookieValue) {
+  try {
+    await page.evaluate(() => true);
+    return { browser, page };
+  } catch {
+    console.log("  Page is dead, attempting recovery...");
+  }
+
+  try {
+    try { await page.close(); } catch {}
+    const newPage = await createPage(browser);
+    await injectCookie(newPage, cookieValue);
+    console.log("  Created new page on existing browser.");
+    return { browser, page: newPage };
+  } catch {
+    console.log("  Browser connection lost, reconnecting...");
+  }
+
+  try { await browser.close(); } catch {}
+  const conn = await connectBrowser();
+  await injectCookie(conn.page, cookieValue);
+  console.log("  Reconnected to browser.");
+  return conn;
 }
 
 async function getPostOwner(page) {
@@ -73,6 +110,24 @@ async function getPostOwner(page) {
   }
 }
 
+async function loadExplorePage(page, hashtag) {
+  await page.goto(
+    `https://www.instagram.com/explore/tags/${hashtag}/`,
+    { waitUntil: "networkidle2" }
+  );
+  await randomDelay(3000, 5000);
+
+  await page.waitForFunction(
+    () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
+    { timeout: 15000 }
+  );
+
+  return page.evaluate(() => {
+    const links = [...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')];
+    return links.map((a) => new URL(a.href).pathname);
+  });
+}
+
 // --- Main ---
 (async () => {
   let browser, page;
@@ -82,27 +137,16 @@ async function getPostOwner(page) {
   try {
     ({ browser, page } = await connectBrowser());
 
-    // --- Inject session cookie and navigate ---
     console.log("Setting session cookie...");
-    await page.setCookie({
-      name: "sessionid",
-      value: String(cookie),
-      domain: ".instagram.com",
-      path: "/",
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-    });
+    await injectCookie(page, cookie);
 
     console.log("Navigating to Instagram...");
     await page.goto("https://www.instagram.com/", { waitUntil: "networkidle2" });
     await randomDelay(2000, 3000);
 
-    // Dismiss cookie consent if present
     await dismissDialogByText(page, ["allow all cookies", "allow essential and optional cookies", "accept"]);
     await randomDelay(1000, 2000);
 
-    // Verify we're logged in (no login form visible)
     const loginForm = await page.$('input[name="username"]');
     if (loginForm) {
       throw new Error("Session cookie appears invalid — login form is still visible. Get a fresh sessionid from your browser.");
@@ -115,77 +159,86 @@ async function getPostOwner(page) {
       let hashtagLiked = 0;
 
       try {
-        await page.goto(`https://www.instagram.com/explore/tags/${hashtag}/`, {
-          waitUntil: "networkidle2",
-        });
-        await randomDelay(3000, 5000);
+        const postPaths = await loadExplorePage(page, hashtag);
 
-        // Wait for post links to appear (posts link to /p/ or /reel/)
-        await page.waitForFunction(
-          () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
-          { timeout: 15000 }
-        );
-
-        // Collect all post links and click into "Most recent" section if possible.
-        // Top posts are usually the first 9; most recent starts after.
-        const postLinks = await page.$$('a[href*="/p/"], a[href*="/reel/"]');
-        if (postLinks.length === 0) {
+        if (postPaths.length === 0) {
           console.log(`  No posts found for #${hashtag}, skipping.`);
+          result.details.push({ hashtag, liked: 0 });
           continue;
         }
 
-        const targetIndex = postLinks.length > 9 ? 9 : 0;
-        console.log(`  Found ${postLinks.length} posts, clicking post ${targetIndex + 1}...`);
-        // Set up navigation listener before clicking (handles full-page navigation for Reels)
-        const navPromise = page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }).catch(() => null);
+        const startIndex = postPaths.length > 9 ? 9 : 0;
+        const paths = postPaths.slice(startIndex);
+        console.log(
+          `  Found ${postPaths.length} posts, will like up to ${likeCount} starting from post ${startIndex + 1}.`
+        );
 
-        await postLinks[targetIndex].click();
-
-        // Wait for the post to load — either as a lightbox or after full-page navigation
-        console.log("  Waiting for post to load...");
-        try {
-          await Promise.race([
-            navPromise,
-            page.waitForFunction(
-              () => !!document.querySelector('[role="dialog"] article'),
-              { timeout: 10000 }
-            ),
-          ]);
-        } catch {
-          // waitForFunction failed (frame detached during navigation) — wait for navigation to finish
-          await navPromise;
-        }
-        await randomDelay(1000, 2000);
-
-        // --- Like-and-advance loop ---
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
+        let onExplorePage = true;
 
-        for (let i = 0; i < likeCount; i++) {
+        for (let i = 0; i < paths.length && hashtagLiked < likeCount; i++) {
+          const postPath = paths[i];
+
           try {
-            // Check if already liked by looking at the like button SVG's aria-label or fill
-            const alreadyLiked = await page.evaluate(() => {
-              // The like button is an SVG inside the post modal. When liked, the svg has
-              // aria-label="Unlike" and fill="red"; when not liked, aria-label="Like".
-              const likeSvg = document.querySelector(
-                'section svg[aria-label="Like"]'
+            // --- 1. Ensure we're on the explore page ---
+            if (!onExplorePage) {
+              await page.goto(
+                `https://www.instagram.com/explore/tags/${hashtag}/`,
+                { waitUntil: "networkidle2" }
               );
-              // If we find an svg with aria-label="Like", the post is NOT yet liked
+              await randomDelay(2000, 3000);
+              onExplorePage = true;
+            }
+
+            // --- 2. Click the post link (SPA navigation → lightbox) ---
+            const navPromise = page
+              .waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 })
+              .catch(() => null);
+
+            const clicked = await page.evaluate((path) => {
+              const link = document.querySelector(`a[href="${path}"]`);
+              if (!link) return false;
+              link.click();
+              return true;
+            }, postPath);
+
+            if (!clicked) {
+              console.log(`  Post ${startIndex + i + 1}: link not found on page, skipping.`);
+              onExplorePage = true;
+              continue;
+            }
+
+            // --- 3. Wait for lightbox or full-page navigation (Reels) ---
+            let usedLightbox = false;
+            try {
+              await page.waitForFunction(
+                () => !!document.querySelector('[role="dialog"] article'),
+                { timeout: 8000 }
+              );
+              usedLightbox = true;
+            } catch {
+              await navPromise;
+              onExplorePage = false;
+            }
+            await randomDelay(1000, 2000);
+
+            await dismissDialogByText(page, ["not now", "cancel"]);
+
+            // --- 4. Like ---
+            const owner = await getPostOwner(page);
+
+            const alreadyLiked = await page.evaluate(() => {
+              const likeSvg = document.querySelector('section svg[aria-label="Like"]');
               return !likeSvg;
             });
 
-            const owner = await getPostOwner(page);
-
             if (alreadyLiked) {
-              console.log(`  Post ${i + 1}: already liked @${owner || "unknown"}, advancing.`);
+              console.log(`  Post ${startIndex + i + 1}: already liked @${owner || "unknown"}, advancing.`);
             } else {
-              // Click the Like button
               await page.evaluate(() => {
-                const likeSvg = document.querySelector(
-                  'section svg[aria-label="Like"]'
-                );
+                const likeSvg = document.querySelector('section svg[aria-label="Like"]');
                 if (likeSvg) {
-                  // Click the closest button ancestor
                   const btn = likeSvg.closest("button") || likeSvg.parentElement;
                   btn.click();
                 }
@@ -193,78 +246,45 @@ async function getPostOwner(page) {
               hashtagLiked++;
               totalLiked++;
               consecutiveFailures = 0;
-              console.log(`  Post ${i + 1}: liked @${owner || "unknown"} (${hashtagLiked} for #${hashtag})`);
+              console.log(`  Post ${startIndex + i + 1}: liked @${owner || "unknown"} (${hashtagLiked}/${likeCount} for #${hashtag})`);
+            }
+
+            // --- 5. Close lightbox (or flag for re-nav) ---
+            if (usedLightbox) {
+              await page.keyboard.press("Escape");
+              await randomDelay(1000, 2000);
+              try {
+                await page.waitForFunction(
+                  () => !document.querySelector('[role="dialog"] article'),
+                  { timeout: 5000 }
+                );
+              } catch {
+                onExplorePage = false;
+              }
+            } else {
+              onExplorePage = false;
             }
 
             await randomDelay();
-
-            // Capture current URL before advancing to detect when the new post loads
-            const prevUrl = page.url();
-
-            // Click "Next" arrow — the post-navigation arrow in the lightbox overlay.
-            // This is an SVG button with aria-label="Next" that lives in the modal overlay,
-            // NOT inside the photo carousel. We target the one inside the overlay div
-            // that sits outside the post content area.
-            const hasNext = await page.evaluate(() => {
-              // Look for all "Next" buttons, pick the one in the modal overlay
-              // (the post navigation arrow, not the carousel arrow).
-              // The modal overlay arrow is typically a direct child of the overlay container
-              // and is a <button> with a nested SVG with aria-label="Next".
-              const allNextButtons = [
-                ...document.querySelectorAll('button svg[aria-label="Next"]'),
-              ].map((svg) => svg.closest("button"));
-
-              // The post-navigation "Next" is in the top-level overlay (role="dialog" parent).
-              // The carousel "Next" is nested deeper inside the post media section.
-              // We pick the one whose closest role="dialog" ancestor is the outermost dialog.
-              for (const btn of allNextButtons) {
-                const dialog = btn.closest('[role="dialog"]');
-                if (dialog) {
-                  // Check if this button is a direct child area of the dialog overlay
-                  // (not nested inside the post article/content)
-                  const article = btn.closest("article");
-                  if (!article) {
-                    // This "Next" is outside the article = post-navigation arrow
-                    btn.click();
-                    return true;
-                  }
-                }
-              }
-
-              // Fallback: if all Next buttons are inside an article, try the last one
-              // (the overlay arrow is often appended after the article)
-              if (allNextButtons.length > 0) {
-                allNextButtons[allNextButtons.length - 1].click();
-                return true;
-              }
-
-              return false;
-            });
-
-            if (!hasNext) {
-              console.log("  No more posts (Next button not found). Moving on.");
-              break;
-            }
-
-            // Wait for the new post to fully load before continuing
-            console.log("  Waiting for next post to load...");
-            try {
-              await page.waitForFunction(
-                (prev) => window.location.href !== prev && !!document.querySelector('[role="dialog"] article'),
-                { timeout: 10000 },
-                prevUrl
-              );
-            } catch {
-              // Timeout — continue anyway, the next action will catch if frame is still detached
-            }
-            await randomDelay(1000, 2000);
           } catch (err) {
             consecutiveFailures++;
-            console.log(`  Post ${i + 1}: error — ${err.message}. Skipping... (${consecutiveFailures}/${FAILURE_LIMIT})`);
+            console.log(
+              `  Post ${startIndex + i + 1}: error — ${err.message}. (${consecutiveFailures}/${FAILURE_LIMIT})`
+            );
+
             if (consecutiveFailures >= FAILURE_LIMIT) {
               throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
             }
-            await randomDelay(1000, 2000);
+
+            try {
+              ({ browser, page } = await ensureConnection(browser, page, cookie));
+              onExplorePage = false;
+            } catch (reconnErr) {
+              console.log(`  Cannot recover connection: ${reconnErr.message}. Moving on.`);
+              break;
+            }
+
+            await randomDelay(2000, 3000);
           }
         }
 
