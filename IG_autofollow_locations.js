@@ -48,6 +48,20 @@ async function dismissDialogByText(page, buttonTexts) {
   return false;
 }
 
+async function scrollToLoadPosts(page, targetCount = 100) {
+  let lastCount = 0;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const count = await page.evaluate(
+      () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length
+    );
+    if (count >= targetCount) break;
+    if (count === lastCount && attempt > 0) break;
+    lastCount = count;
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await randomDelay(1500, 2500);
+  }
+}
+
 async function getPostOwner(page) {
   try {
     return await page.evaluate(() => {
@@ -126,15 +140,16 @@ async function getPostOwner(page) {
           { timeout: 15000 }
         );
 
-        // Collect all post links and click into "Most recent" section if possible.
-        // Top posts are usually the first 9; most recent starts after.
+        // Scroll to load more posts before collecting
+        await scrollToLoadPosts(page);
+
         const postLinks = await page.$$('a[href*="/p/"], a[href*="/reel/"]');
         if (postLinks.length === 0) {
           console.log(`  No posts found for location ${locationId}, skipping.`);
           continue;
         }
 
-        const targetIndex = postLinks.length > 9 ? 9 : 0;
+        const targetIndex = postLinks.length > 99 ? 99 : 0;
         console.log(`  Found ${postLinks.length} posts, clicking post ${targetIndex + 1}...`);
         // Set up navigation listener before clicking (handles full-page navigation for Reels)
         const navPromise = page.waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 }).catch(() => null);

@@ -134,6 +134,20 @@ async function postComment(page, text) {
   await randomDelay(2000, 3000);
 }
 
+async function scrollToLoadPosts(page, targetCount = 100) {
+  let lastCount = 0;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const count = await page.evaluate(
+      () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length
+    );
+    if (count >= targetCount) break;
+    if (count === lastCount && attempt > 0) break;
+    lastCount = count;
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await randomDelay(1500, 2500);
+  }
+}
+
 async function getPostOwner(page) {
   try {
     return await page.evaluate(() => {
@@ -170,6 +184,9 @@ async function loadExplorePage(page, locationId) {
     () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
     { timeout: 15000 }
   );
+
+  // Scroll to load more posts before collecting
+  await scrollToLoadPosts(page);
 
   return page.evaluate(() => {
     const links = [...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')];
@@ -231,7 +248,7 @@ async function loadExplorePage(page, locationId) {
           continue;
         }
 
-        const startIndex = postPaths.length > 9 ? 9 : 0;
+        const startIndex = postPaths.length > 99 ? 99 : 0;
         const paths = postPaths.slice(startIndex);
         console.log(
           `  Found ${postPaths.length} posts, will comment on up to ${commentCount} starting from post ${startIndex + 1}.`
