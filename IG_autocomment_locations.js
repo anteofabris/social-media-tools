@@ -61,12 +61,6 @@ async function dismissDialogByText(page, buttonTexts) {
   return false;
 }
 
-/**
- * Tiered recovery: try to restore a working page/browser connection.
- *   Tier 1 — page is still alive (no-op).
- *   Tier 2 — page died, but browser WS is alive → create new page.
- *   Tier 3 — browser WS died → full reconnect.
- */
 async function ensureConnection(browser, page, cookieValue) {
   try {
     await page.evaluate(() => true);
@@ -140,6 +134,24 @@ async function postComment(page, text) {
   await randomDelay(2000, 3000);
 }
 
+async function loadExplorePage(page, locationId) {
+  await page.goto(
+    `https://www.instagram.com/explore/locations/${locationId}/`,
+    { waitUntil: "networkidle2" }
+  );
+  await randomDelay(3000, 5000);
+
+  await page.waitForFunction(
+    () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
+    { timeout: 15000 }
+  );
+
+  return page.evaluate(() => {
+    const links = [...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')];
+    return links.map((a) => new URL(a.href).pathname);
+  });
+}
+
 // --- Main ---
 (async () => {
   let browser, page;
@@ -186,54 +198,66 @@ async function postComment(page, text) {
       const comments = [];
 
       try {
-        await page.goto(
-          `https://www.instagram.com/explore/locations/${locationId}/`,
-          { waitUntil: "networkidle2" }
-        );
-        await randomDelay(3000, 5000);
+        const postPaths = await loadExplorePage(page, locationId);
 
-        await page.waitForFunction(
-          () =>
-            document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')
-              .length > 0,
-          { timeout: 15000 }
-        );
-
-        // --- Collect post URLs as strings (not element handles) ---
-        const postUrls = await page.evaluate(() => {
-          const links = [
-            ...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'),
-          ];
-          return links.map((a) => a.href);
-        });
-
-        if (postUrls.length === 0) {
+        if (postPaths.length === 0) {
           console.log(`  No posts found for location ${locationId}, skipping.`);
           result.details.push({ location: locationId, commented: 0, comments });
           continue;
         }
 
-        const startIndex = postUrls.length > 9 ? 9 : 0;
-        const urls = postUrls.slice(startIndex);
+        const startIndex = postPaths.length > 9 ? 9 : 0;
+        const paths = postPaths.slice(startIndex);
         console.log(
-          `  Found ${postUrls.length} posts, will comment on up to ${commentCount} starting from post ${startIndex + 1}.`
+          `  Found ${postPaths.length} posts, will comment on up to ${commentCount} starting from post ${startIndex + 1}.`
         );
 
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
+        let onExplorePage = true;
 
-        // --- Navigate to each post directly (no lightbox) ---
-        for (let i = 0; i < urls.length && locationCommented < commentCount; i++) {
-          const url = urls[i];
+        for (let i = 0; i < paths.length && locationCommented < commentCount; i++) {
+          const postPath = paths[i];
 
           try {
-            await page.goto(url, {
-              waitUntil: "networkidle2",
-              timeout: 20000,
-            });
-            await randomDelay(2000, 3000);
+            if (!onExplorePage) {
+              await page.goto(
+                `https://www.instagram.com/explore/locations/${locationId}/`,
+                { waitUntil: "networkidle2" }
+              );
+              await randomDelay(2000, 3000);
+              onExplorePage = true;
+            }
 
-            await page.waitForSelector("article", { timeout: 10000 });
+            const navPromise = page
+              .waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 })
+              .catch(() => null);
+
+            const clicked = await page.evaluate((path) => {
+              const link = document.querySelector(`a[href="${path}"]`);
+              if (!link) return false;
+              link.click();
+              return true;
+            }, postPath);
+
+            if (!clicked) {
+              console.log(`  Post ${startIndex + i + 1}: link not found on page, skipping.`);
+              onExplorePage = true;
+              continue;
+            }
+
+            let usedLightbox = false;
+            try {
+              await page.waitForFunction(
+                () => !!document.querySelector('[role="dialog"] article'),
+                { timeout: 8000 }
+              );
+              usedLightbox = true;
+            } catch {
+              await navPromise;
+              onExplorePage = false;
+            }
+            await randomDelay(1000, 2000);
 
             await dismissDialogByText(page, ["not now", "cancel"]);
 
@@ -247,6 +271,21 @@ async function postComment(page, text) {
             console.log(
               `  Post ${startIndex + i + 1}: commented "${commentText}" (${locationCommented}/${commentCount} for location ${locationId})`
             );
+
+            if (usedLightbox) {
+              await page.keyboard.press("Escape");
+              await randomDelay(1000, 2000);
+              try {
+                await page.waitForFunction(
+                  () => !document.querySelector('[role="dialog"] article'),
+                  { timeout: 5000 }
+                );
+              } catch {
+                onExplorePage = false;
+              }
+            } else {
+              onExplorePage = false;
+            }
 
             await randomDelay();
           } catch (err) {
@@ -262,11 +301,8 @@ async function postComment(page, text) {
             }
 
             try {
-              ({ browser, page } = await ensureConnection(
-                browser,
-                page,
-                cookie
-              ));
+              ({ browser, page } = await ensureConnection(browser, page, cookie));
+              onExplorePage = false;
             } catch (reconnErr) {
               console.log(
                 `  Cannot recover connection: ${reconnErr.message}. Moving on.`

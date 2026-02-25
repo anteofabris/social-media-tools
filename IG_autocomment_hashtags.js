@@ -62,13 +62,12 @@ async function dismissDialogByText(page, buttonTexts) {
 }
 
 /**
- * Tiered recovery: try to restore a working page/browser connection.
+ * Tiered recovery: restore a working page/browser connection.
  *   Tier 1 — page is still alive (no-op).
  *   Tier 2 — page died, but browser WS is alive → create new page.
  *   Tier 3 — browser WS died → full reconnect.
  */
 async function ensureConnection(browser, page, cookieValue) {
-  // Tier 1: page still alive?
   try {
     await page.evaluate(() => true);
     return { browser, page };
@@ -76,7 +75,6 @@ async function ensureConnection(browser, page, cookieValue) {
     console.log("  Page is dead, attempting recovery...");
   }
 
-  // Tier 2: browser alive? create fresh page
   try {
     try { await page.close(); } catch {}
     const newPage = await createPage(browser);
@@ -87,7 +85,6 @@ async function ensureConnection(browser, page, cookieValue) {
     console.log("  Browser connection lost, reconnecting...");
   }
 
-  // Tier 3: full reconnect
   try { await browser.close(); } catch {}
   const conn = await connectBrowser();
   await injectCookie(conn.page, cookieValue);
@@ -111,11 +108,9 @@ async function postComment(page, text) {
   }
   if (!textarea) throw new Error("Comment textarea not found");
 
-  // Click to focus (Instagram swaps the textarea on focus)
   await textarea.click();
   await randomDelay(500, 1000);
 
-  // Re-query after focus
   textarea = null;
   for (const sel of selectors) {
     textarea = await page.$(sel);
@@ -126,7 +121,6 @@ async function postComment(page, text) {
   await textarea.type(text, { delay: 60 });
   await randomDelay(500, 1000);
 
-  // Submit via "Post" button
   const posted = await page.evaluate(() => {
     const buttons = [...document.querySelectorAll("button")];
     const postBtn = buttons.find(
@@ -144,6 +138,28 @@ async function postComment(page, text) {
   }
 
   await randomDelay(2000, 3000);
+}
+
+/**
+ * Navigate to the explore page and return fresh post paths.
+ */
+async function loadExplorePage(page, hashtag) {
+  await page.goto(
+    `https://www.instagram.com/explore/tags/${hashtag}/`,
+    { waitUntil: "networkidle2" }
+  );
+  await randomDelay(3000, 5000);
+
+  await page.waitForFunction(
+    () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
+    { timeout: 15000 }
+  );
+
+  // Return post link pathnames as plain strings (immune to stale handles)
+  return page.evaluate(() => {
+    const links = [...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')];
+    return links.map((a) => new URL(a.href).pathname);
+  });
 }
 
 // --- Main ---
@@ -192,60 +208,76 @@ async function postComment(page, text) {
       const comments = [];
 
       try {
-        await page.goto(
-          `https://www.instagram.com/explore/tags/${hashtag}/`,
-          { waitUntil: "networkidle2" }
-        );
-        await randomDelay(3000, 5000);
+        const postPaths = await loadExplorePage(page, hashtag);
 
-        await page.waitForFunction(
-          () =>
-            document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')
-              .length > 0,
-          { timeout: 15000 }
-        );
-
-        // --- Collect post URLs as strings (not element handles) ---
-        const postUrls = await page.evaluate(() => {
-          const links = [
-            ...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]'),
-          ];
-          return links.map((a) => a.href);
-        });
-
-        if (postUrls.length === 0) {
+        if (postPaths.length === 0) {
           console.log(`  No posts found for #${hashtag}, skipping.`);
           result.details.push({ hashtag, commented: 0, comments });
           continue;
         }
 
         // Skip top/featured posts (first 9), start from "most recent"
-        const startIndex = postUrls.length > 9 ? 9 : 0;
-        const urls = postUrls.slice(startIndex);
+        const startIndex = postPaths.length > 9 ? 9 : 0;
+        const paths = postPaths.slice(startIndex);
         console.log(
-          `  Found ${postUrls.length} posts, will comment on up to ${commentCount} starting from post ${startIndex + 1}.`
+          `  Found ${postPaths.length} posts, will comment on up to ${commentCount} starting from post ${startIndex + 1}.`
         );
 
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
+        let onExplorePage = true; // track whether we're on the explore grid
 
-        // --- Navigate to each post directly (no lightbox) ---
-        for (let i = 0; i < urls.length && hashtagCommented < commentCount; i++) {
-          const url = urls[i];
+        for (let i = 0; i < paths.length && hashtagCommented < commentCount; i++) {
+          const postPath = paths[i];
 
           try {
-            await page.goto(url, {
-              waitUntil: "networkidle2",
-              timeout: 20000,
-            });
-            await randomDelay(2000, 3000);
+            // --- 1. Ensure we're on the explore page ---
+            if (!onExplorePage) {
+              await page.goto(
+                `https://www.instagram.com/explore/tags/${hashtag}/`,
+                { waitUntil: "networkidle2" }
+              );
+              await randomDelay(2000, 3000);
+              onExplorePage = true;
+            }
 
-            // Wait for the post content to render
-            await page.waitForSelector("article", { timeout: 10000 });
+            // --- 2. Click the post link (SPA navigation → lightbox) ---
+            const navPromise = page
+              .waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 })
+              .catch(() => null);
 
-            // Dismiss any overlay dialogs (notifications prompt, etc.)
+            const clicked = await page.evaluate((path) => {
+              const link = document.querySelector(`a[href="${path}"]`);
+              if (!link) return false;
+              link.click();
+              return true;
+            }, postPath);
+
+            if (!clicked) {
+              console.log(`  Post ${startIndex + i + 1}: link not found on page, skipping.`);
+              onExplorePage = true; // still on explore page
+              continue;
+            }
+
+            // --- 3. Wait for lightbox or full-page navigation (Reels) ---
+            let usedLightbox = false;
+            try {
+              await page.waitForFunction(
+                () => !!document.querySelector('[role="dialog"] article'),
+                { timeout: 8000 }
+              );
+              usedLightbox = true;
+            } catch {
+              // Reel or other full-page nav — wait for it to settle
+              await navPromise;
+              onExplorePage = false;
+            }
+            await randomDelay(1000, 2000);
+
+            // Dismiss overlay dialogs ("Turn on notifications", etc.)
             await dismissDialogByText(page, ["not now", "cancel"]);
 
+            // --- 4. Comment ---
             const commentText = await getAIComment(page);
             await postComment(page, commentText);
 
@@ -256,6 +288,24 @@ async function postComment(page, text) {
             console.log(
               `  Post ${startIndex + i + 1}: commented "${commentText}" (${hashtagCommented}/${commentCount} for #${hashtag})`
             );
+
+            // --- 5. Close lightbox (or flag for re-nav) ---
+            if (usedLightbox) {
+              await page.keyboard.press("Escape");
+              await randomDelay(1000, 2000);
+              // Verify lightbox closed
+              try {
+                await page.waitForFunction(
+                  () => !document.querySelector('[role="dialog"] article'),
+                  { timeout: 5000 }
+                );
+              } catch {
+                // Lightbox stuck — will re-navigate next iteration
+                onExplorePage = false;
+              }
+            } else {
+              onExplorePage = false;
+            }
 
             await randomDelay();
           } catch (err) {
@@ -270,13 +320,10 @@ async function postComment(page, text) {
               );
             }
 
-            // Ensure we have a working connection for the next post
+            // Ensure connection and flag to re-navigate to explore page
             try {
-              ({ browser, page } = await ensureConnection(
-                browser,
-                page,
-                cookie
-              ));
+              ({ browser, page } = await ensureConnection(browser, page, cookie));
+              onExplorePage = false;
             } catch (reconnErr) {
               console.log(
                 `  Cannot recover connection: ${reconnErr.message}. Moving on.`
