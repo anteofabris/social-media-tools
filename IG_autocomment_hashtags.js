@@ -168,6 +168,20 @@ async function getPostOwner(page) {
 /**
  * Navigate to the explore page and return fresh post paths.
  */
+async function scrollToLoadPosts(page, targetCount = 100) {
+  let lastCount = 0;
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const count = await page.evaluate(
+      () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length
+    );
+    if (count >= targetCount) break;
+    if (count === lastCount && attempt > 0) break;
+    lastCount = count;
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await randomDelay(1500, 2500);
+  }
+}
+
 async function loadExplorePage(page, hashtag) {
   await page.goto(
     `https://www.instagram.com/explore/tags/${hashtag}/`,
@@ -179,6 +193,8 @@ async function loadExplorePage(page, hashtag) {
     () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
     { timeout: 15000 }
   );
+
+  await scrollToLoadPosts(page);
 
   // Return post link pathnames as plain strings (immune to stale handles)
   return page.evaluate(() => {
@@ -242,7 +258,7 @@ async function loadExplorePage(page, hashtag) {
         }
 
         // Skip top/featured posts (first 9), start from "most recent"
-        const startIndex = postPaths.length > 9 ? 9 : 0;
+        const startIndex = postPaths.length > 99 ? 99 : 0;
         const paths = postPaths.slice(startIndex);
         console.log(
           `  Found ${postPaths.length} posts, will comment on up to ${commentCount} starting from post ${startIndex + 1}.`
