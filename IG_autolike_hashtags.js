@@ -110,6 +110,36 @@ async function getPostOwner(page) {
   }
 }
 
+async function getLikeCount(page) {
+  try {
+    return await page.evaluate(() => {
+      const dialog = document.querySelector('[role="dialog"]');
+      const container = dialog || document;
+      const article = container.querySelector('article');
+      if (!article) return null;
+
+      const likedByLink = article.querySelector('a[href*="liked_by"]');
+      if (likedByLink) {
+        const num = likedByLink.textContent.replace(/[^0-9]/g, '');
+        if (num) return parseInt(num, 10);
+      }
+
+      const sections = article.querySelectorAll('section');
+      for (const sec of sections) {
+        const match = sec.textContent.match(/([\d,]+)\s+likes?\b/i);
+        if (match) return parseInt(match[1].replace(/,/g, ''), 10);
+      }
+
+      const othersMatch = article.textContent.match(/and\s+([\d,]+)\s+others?\b/i);
+      if (othersMatch) return parseInt(othersMatch[1].replace(/,/g, ''), 10) + 1;
+
+      return null;
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function scrollToLoadPosts(page, targetCount = 100) {
   let lastCount = 0;
   for (let attempt = 0; attempt < 30; attempt++) {
@@ -252,17 +282,22 @@ async function loadExplorePage(page, hashtag) {
             if (alreadyLiked) {
               console.log(`  Post ${startIndex + i + 1}: already liked @${owner || "unknown"}, advancing.`);
             } else {
-              await page.evaluate(() => {
-                const likeSvg = document.querySelector('section svg[aria-label="Like"]');
-                if (likeSvg) {
-                  const btn = likeSvg.closest("button") || likeSvg.parentElement;
-                  btn.click();
-                }
-              });
-              hashtagLiked++;
-              totalLiked++;
-              consecutiveFailures = 0;
-              console.log(`  Post ${startIndex + i + 1}: liked @${owner || "unknown"} (${hashtagLiked}/${likeCount} for #${hashtag})`);
+              const postLikes = await getLikeCount(page);
+              if (postLikes !== null && postLikes >= 100) {
+                console.log(`  Post ${startIndex + i + 1}: @${owner || "unknown"} has ${postLikes} likes (>=100), skipping.`);
+              } else {
+                await page.evaluate(() => {
+                  const likeSvg = document.querySelector('section svg[aria-label="Like"]');
+                  if (likeSvg) {
+                    const btn = likeSvg.closest("button") || likeSvg.parentElement;
+                    btn.click();
+                  }
+                });
+                hashtagLiked++;
+                totalLiked++;
+                consecutiveFailures = 0;
+                console.log(`  Post ${startIndex + i + 1}: liked @${owner || "unknown"} (${hashtagLiked}/${likeCount} for #${hashtag})`);
+              }
             }
 
             // --- 5. Close lightbox (or flag for re-nav) ---
