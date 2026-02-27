@@ -72,6 +72,70 @@ async function dismissDialogByText(page, buttonTexts) {
   return false;
 }
 
+async function sortByEarliest(page) {
+  try {
+    // Look for sort control button in the following dialog
+    const sortClicked = await page.evaluate(() => {
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      for (const dialog of dialogs) {
+        const buttons = [...dialog.querySelectorAll("button")];
+        const sortBtn = buttons.find((b) => {
+          const text = b.textContent.trim().toLowerCase();
+          return text.includes("sort by") || text === "default";
+        });
+        if (sortBtn) {
+          sortBtn.click();
+          return true;
+        }
+      }
+      return false;
+    });
+
+    if (!sortClicked) {
+      console.log("  Sort control not found — continuing with default order.");
+      return;
+    }
+
+    await randomDelay(1000, 2000);
+
+    // Select the "earliest" option
+    const earliestSelected = await page.evaluate(() => {
+      const buttons = [...document.querySelectorAll("button")];
+      const earliestBtn = buttons.find((b) =>
+        b.textContent.trim().toLowerCase().includes("earliest")
+      );
+      if (earliestBtn) {
+        earliestBtn.click();
+        return true;
+      }
+      return false;
+    });
+
+    if (earliestSelected) {
+      console.log("Sorted by date followed: earliest.");
+      await randomDelay(1500, 2500);
+    } else {
+      console.log("  'Earliest' sort option not found — continuing with default order.");
+    }
+  } catch (err) {
+    console.log(`  Sort failed (${err.message}) — continuing with default order.`);
+  }
+}
+
+async function scrollFollowingDialog(page) {
+  await page.evaluate(() => {
+    const dialogs = document.querySelectorAll('[role="dialog"]');
+    for (const dialog of dialogs) {
+      const scrollable = dialog.querySelector("div[style*='overflow']") ||
+        dialog.querySelector("div[class] > div > div");
+      if (scrollable) {
+        scrollable.scrollTop = scrollable.scrollHeight;
+      }
+    }
+  });
+  await randomDelay(1500, 2500);
+}
+
 // --- Main ---
 (async () => {
   let browser, page;
@@ -156,23 +220,34 @@ async function dismissDialogByText(page, buttonTexts) {
     );
     console.log("Following list opened.");
 
+    // --- Sort by earliest and pre-scroll to load accounts ---
+    await sortByEarliest(page);
+
+    console.log("Pre-scrolling to load accounts...");
+    for (let s = 0; s < 5; s++) {
+      await scrollFollowingDialog(page);
+    }
+
     // --- Unfollow loop ---
     let consecutiveFailures = 0;
     const FAILURE_LIMIT = 10;
+    const MAX_EMPTY_SCROLLS = 10;
+    let emptyScrolls = 0;
+    const processedUsers = new Set();
 
-    for (let i = 0; i < unfollowCount; i++) {
+    while (totalUnfollowed < unfollowCount && emptyScrolls < MAX_EMPTY_SCROLLS) {
       try {
-        // Find a "Following" button inside the dialog's list, skipping protected accounts
-        let unfollowTarget = null;
+        // Find a "Following" button inside the dialog's list, skipping protected and already-processed accounts
         const skipArray = [...skipSet];
-        const foundFollowing = await page.evaluate((skipList) => {
+        const processedArray = [...processedUsers];
+        const foundFollowing = await page.evaluate((skipList, processedList) => {
           const skipLower = new Set(skipList);
+          const processedLower = new Set(processedList);
           const dialogs = document.querySelectorAll('[role="dialog"]');
           for (const dialog of dialogs) {
             const buttons = [...dialog.querySelectorAll("button")];
             const followingBtns = buttons.filter((b) => b.textContent.trim() === "Following");
             for (const btn of followingBtns) {
-              // Walk up from the button to find the nearest list item container, then look for a link with the username
               let container = btn.closest("li") || btn.parentElement?.parentElement?.parentElement;
               let username = null;
               if (container) {
@@ -188,7 +263,7 @@ async function dismissDialogByText(page, buttonTexts) {
                 }
               }
               const userLower = username ? username.toLowerCase() : null;
-              if (userLower && skipLower.has(userLower)) {
+              if (userLower && (skipLower.has(userLower) || processedLower.has(userLower))) {
                 continue;
               }
               btn.click();
@@ -196,74 +271,27 @@ async function dismissDialogByText(page, buttonTexts) {
             }
           }
           return { found: false, username: null };
-        }, skipArray);
+        }, skipArray, processedArray);
 
         if (!foundFollowing.found) {
-          // Try scrolling the dialog's scrollable container to load more
+          // No eligible buttons — scroll to load more accounts
           console.log("  No eligible 'Following' buttons visible, scrolling to load more...");
-          await page.evaluate(() => {
-            const dialogs = document.querySelectorAll('[role="dialog"]');
-            for (const dialog of dialogs) {
-              // The scrollable container is usually a div with overflow
-              const scrollable = dialog.querySelector("div[style*='overflow']") ||
-                dialog.querySelector("div[class] > div > div");
-              if (scrollable) {
-                scrollable.scrollTop = scrollable.scrollHeight;
-              }
-            }
-          });
-          await randomDelay(2000, 3000);
-
-          // Retry finding a "Following" button after scroll, still respecting skip list
-          const retryFound = await page.evaluate((skipList) => {
-            const skipLower = new Set(skipList);
-            const dialogs = document.querySelectorAll('[role="dialog"]');
-            for (const dialog of dialogs) {
-              const buttons = [...dialog.querySelectorAll("button")];
-              const followingBtns = buttons.filter((b) => b.textContent.trim() === "Following");
-              for (const btn of followingBtns) {
-                let container = btn.closest("li") || btn.parentElement?.parentElement?.parentElement;
-                let username = null;
-                if (container) {
-                  const link = container.querySelector('a[href*="/"]');
-                  if (link) {
-                    const href = link.getAttribute("href");
-                    const match = href.match(/^\/([a-zA-Z0-9._]+)\/?$/);
-                    if (match) username = match[1];
-                  }
-                  if (!username) {
-                    const span = container.querySelector("span");
-                    if (span) username = span.textContent.trim();
-                  }
-                }
-                const userLower = username ? username.toLowerCase() : null;
-                if (userLower && skipLower.has(userLower)) {
-                  continue;
-                }
-                btn.click();
-                return { found: true, username: username || "(unknown)" };
-              }
-            }
-            return { found: false, username: null };
-          }, skipArray);
-
-          if (!retryFound.found) {
-            console.log("  No more eligible 'Following' buttons found after scrolling. End of list.");
-            break;
-          }
-          console.log(`  Unfollowing: ${retryFound.username}`);
-          unfollowTarget = retryFound.username || "(unknown)";
-        } else {
-          console.log(`  Unfollowing: ${foundFollowing.username}`);
-          unfollowTarget = foundFollowing.username || "(unknown)";
+          await scrollFollowingDialog(page);
+          emptyScrolls++;
+          console.log(`  Empty scrolls: ${emptyScrolls}/${MAX_EMPTY_SCROLLS}`);
+          continue;
         }
+
+        const unfollowTarget = foundFollowing.username || "(unknown)";
+        processedUsers.add(unfollowTarget.toLowerCase());
+        console.log(`  Unfollowing: ${unfollowTarget}`);
 
         await randomDelay(1000, 2000);
 
         // Click the "Unfollow" confirmation button in the popup
         const confirmed = await dismissDialogByText(page, ["unfollow"]);
         if (!confirmed) {
-          console.log(`  Unfollow ${i + 1}: confirmation dialog not found. Skipping.`);
+          console.log(`  Unfollow: confirmation dialog not found for ${unfollowTarget}. Skipping.`);
           consecutiveFailures++;
           if (consecutiveFailures >= FAILURE_LIMIT) {
             throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
@@ -273,18 +301,23 @@ async function dismissDialogByText(page, buttonTexts) {
 
         totalUnfollowed++;
         consecutiveFailures = 0;
-        if (unfollowTarget) result.unfollowed.push(unfollowTarget);
+        emptyScrolls = 0;
+        result.unfollowed.push(unfollowTarget);
         console.log(`  Unfollowed ${totalUnfollowed}/${unfollowCount}`);
 
         await randomDelay();
       } catch (err) {
-        console.log(`  Unfollow ${i + 1}: error — ${err.message}. Continuing...`);
+        console.log(`  Unfollow error — ${err.message}. Continuing...`);
         consecutiveFailures++;
         if (consecutiveFailures >= FAILURE_LIMIT) {
           throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
         }
         await randomDelay(1000, 2000);
       }
+    }
+
+    if (emptyScrolls >= MAX_EMPTY_SCROLLS) {
+      console.log(`Stopped: ${MAX_EMPTY_SCROLLS} consecutive scrolls with no new eligible accounts.`);
     }
   } catch (err) {
     result.success = false;
