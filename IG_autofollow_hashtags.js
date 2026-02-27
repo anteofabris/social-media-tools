@@ -188,7 +188,7 @@ async function loadExplorePage(page, hashtag) {
             break;
           }
 
-          const startIndex = postPaths.length > 99 ? 99 : 0;
+          const startIndex = postPaths.length > 4 ? 4 : 0;
           const paths = postPaths.slice(startIndex).filter((p) => !visitedPaths.has(p));
 
           if (paths.length === 0) {
