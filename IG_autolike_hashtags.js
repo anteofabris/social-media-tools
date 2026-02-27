@@ -205,26 +205,36 @@ async function loadExplorePage(page, hashtag) {
       let hashtagLiked = 0;
 
       try {
-        const postPaths = await loadExplorePage(page, hashtag);
-
-        if (postPaths.length === 0) {
-          console.log(`  No posts found for #${hashtag}, skipping.`);
-          result.details.push({ hashtag, liked: 0 });
-          continue;
-        }
-
-        const startIndex = postPaths.length > 99 ? 99 : 0;
-        const paths = postPaths.slice(startIndex);
-        console.log(
-          `  Found ${postPaths.length} posts, will like up to ${likeCount} starting from post ${startIndex + 1}.`
-        );
-
+        const visitedPaths = new Set();
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
-        let onExplorePage = true;
+        const MAX_ROUNDS = 5;
 
-        for (let i = 0; i < paths.length && hashtagLiked < likeCount; i++) {
-          const postPath = paths[i];
+        for (let round = 1; round <= MAX_ROUNDS && hashtagLiked < likeCount; round++) {
+          const postPaths = await loadExplorePage(page, hashtag);
+
+          if (postPaths.length === 0) {
+            console.log(`  No posts found for #${hashtag}.`);
+            break;
+          }
+
+          const startIndex = postPaths.length > 99 ? 99 : 0;
+          const paths = postPaths.slice(startIndex).filter((p) => !visitedPaths.has(p));
+
+          if (paths.length === 0) {
+            console.log(`  No new posts to process for #${hashtag}.`);
+            break;
+          }
+
+          console.log(
+            `  Round ${round}: found ${postPaths.length} posts (${paths.length} new), need ${likeCount - hashtagLiked} more likes.`
+          );
+
+          let onExplorePage = true;
+
+          for (let i = 0; i < paths.length && hashtagLiked < likeCount; i++) {
+            const postPath = paths[i];
+            visitedPaths.add(postPath);
 
           try {
             // --- 1. Ensure we're on the explore page ---
@@ -250,7 +260,7 @@ async function loadExplorePage(page, hashtag) {
             }, postPath);
 
             if (!clicked) {
-              console.log(`  Post ${startIndex + i + 1}: link not found on page, skipping.`);
+              console.log(`  Post ${visitedPaths.size}: link not found on page, skipping.`);
               onExplorePage = true;
               continue;
             }
@@ -280,11 +290,11 @@ async function loadExplorePage(page, hashtag) {
             });
 
             if (alreadyLiked) {
-              console.log(`  Post ${startIndex + i + 1}: already liked @${owner || "unknown"}, advancing.`);
+              console.log(`  Post ${visitedPaths.size}: already liked @${owner || "unknown"}, advancing.`);
             } else {
               const postLikes = await getLikeCount(page);
               if (postLikes !== null && postLikes >= 100) {
-                console.log(`  Post ${startIndex + i + 1}: @${owner || "unknown"} has ${postLikes} likes (>=100), skipping.`);
+                console.log(`  Post ${visitedPaths.size}: @${owner || "unknown"} has ${postLikes} likes (>=100), skipping.`);
               } else {
                 await page.evaluate(() => {
                   const likeSvg = document.querySelector('section svg[aria-label="Like"]');
@@ -296,7 +306,7 @@ async function loadExplorePage(page, hashtag) {
                 hashtagLiked++;
                 totalLiked++;
                 consecutiveFailures = 0;
-                console.log(`  Post ${startIndex + i + 1}: liked @${owner || "unknown"} (${hashtagLiked}/${likeCount} for #${hashtag})`);
+                console.log(`  Post ${visitedPaths.size}: liked @${owner || "unknown"} (${hashtagLiked}/${likeCount} for #${hashtag})`);
               }
             }
 
@@ -320,7 +330,7 @@ async function loadExplorePage(page, hashtag) {
           } catch (err) {
             consecutiveFailures++;
             console.log(
-              `  Post ${startIndex + i + 1}: error — ${err.message}. (${consecutiveFailures}/${FAILURE_LIMIT})`
+              `  Post ${visitedPaths.size}: error — ${err.message}. (${consecutiveFailures}/${FAILURE_LIMIT})`
             );
 
             if (consecutiveFailures >= FAILURE_LIMIT) {
@@ -337,6 +347,7 @@ async function loadExplorePage(page, hashtag) {
 
             await randomDelay(2000, 3000);
           }
+        }
         }
 
         console.log(`  Finished #${hashtag}: ${hashtagLiked} posts liked.`);

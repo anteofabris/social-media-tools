@@ -249,27 +249,36 @@ async function loadExplorePage(page, hashtag) {
       const comments = [];
 
       try {
-        const postPaths = await loadExplorePage(page, hashtag);
-
-        if (postPaths.length === 0) {
-          console.log(`  No posts found for #${hashtag}, skipping.`);
-          result.details.push({ hashtag, commented: 0, comments });
-          continue;
-        }
-
-        // Skip top/featured posts (first 9), start from "most recent"
-        const startIndex = postPaths.length > 99 ? 99 : 0;
-        const paths = postPaths.slice(startIndex);
-        console.log(
-          `  Found ${postPaths.length} posts, will comment on up to ${commentCount} starting from post ${startIndex + 1}.`
-        );
-
+        const visitedPaths = new Set();
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
-        let onExplorePage = true; // track whether we're on the explore grid
+        const MAX_ROUNDS = 5;
 
-        for (let i = 0; i < paths.length && hashtagCommented < commentCount; i++) {
-          const postPath = paths[i];
+        for (let round = 1; round <= MAX_ROUNDS && hashtagCommented < commentCount; round++) {
+          const postPaths = await loadExplorePage(page, hashtag);
+
+          if (postPaths.length === 0) {
+            console.log(`  No posts found for #${hashtag}.`);
+            break;
+          }
+
+          const startIndex = postPaths.length > 99 ? 99 : 0;
+          const paths = postPaths.slice(startIndex).filter((p) => !visitedPaths.has(p));
+
+          if (paths.length === 0) {
+            console.log(`  No new posts to process for #${hashtag}.`);
+            break;
+          }
+
+          console.log(
+            `  Round ${round}: found ${postPaths.length} posts (${paths.length} new), need ${commentCount - hashtagCommented} more comments.`
+          );
+
+          let onExplorePage = true;
+
+          for (let i = 0; i < paths.length && hashtagCommented < commentCount; i++) {
+            const postPath = paths[i];
+            visitedPaths.add(postPath);
 
           try {
             // --- 1. Ensure we're on the explore page ---
@@ -295,7 +304,7 @@ async function loadExplorePage(page, hashtag) {
             }, postPath);
 
             if (!clicked) {
-              console.log(`  Post ${startIndex + i + 1}: link not found on page, skipping.`);
+              console.log(`  Post ${visitedPaths.size}: link not found on page, skipping.`);
               onExplorePage = true; // still on explore page
               continue;
             }
@@ -328,7 +337,7 @@ async function loadExplorePage(page, hashtag) {
             consecutiveFailures = 0;
             comments.push(commentText);
             console.log(
-              `  Post ${startIndex + i + 1}: commented on @${owner || "unknown"} "${commentText}" (${hashtagCommented}/${commentCount} for #${hashtag})`
+              `  Post ${visitedPaths.size}: commented on @${owner || "unknown"} "${commentText}" (${hashtagCommented}/${commentCount} for #${hashtag})`
             );
 
             // --- 5. Close lightbox (or flag for re-nav) ---
@@ -353,7 +362,7 @@ async function loadExplorePage(page, hashtag) {
           } catch (err) {
             consecutiveFailures++;
             console.log(
-              `  Post ${startIndex + i + 1}: error — ${err.message}. (${consecutiveFailures}/${FAILURE_LIMIT})`
+              `  Post ${visitedPaths.size}: error — ${err.message}. (${consecutiveFailures}/${FAILURE_LIMIT})`
             );
 
             if (consecutiveFailures >= FAILURE_LIMIT) {
@@ -375,6 +384,7 @@ async function loadExplorePage(page, hashtag) {
 
             await randomDelay(2000, 3000);
           }
+        }
         }
 
         console.log(
