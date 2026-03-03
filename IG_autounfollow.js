@@ -27,24 +27,39 @@ if (accountsList.length === 0) {
   process.exit(1);
 }
 
-// --- Load skip list ---
+// --- Load skip list (skip_accounts.json + followers.json) ---
 let skipSet = new Set();
 try {
-  const skipFilePath = path.join(__dirname, "skip_accounts.json");
-  const raw = fs.readFileSync(skipFilePath, "utf-8");
-  const fileSkipList = JSON.parse(raw);
-  if (Array.isArray(fileSkipList)) {
-    for (const u of fileSkipList) skipSet.add(String(u).toLowerCase());
+  const raw = fs.readFileSync(path.join(__dirname, "skip_accounts.json"), "utf-8");
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed)) {
+    for (const u of parsed) skipSet.add(String(u).toLowerCase());
   }
 } catch (err) {
   if (err.code === "ENOENT") {
-    console.warn("Warning: skip_accounts.json not found. No skip list loaded.");
+    console.warn("Warning: skip_accounts.json not found.");
   } else {
     console.warn(`Warning: Could not parse skip_accounts.json: ${err.message}.`);
   }
 }
+const skipFileCount = skipSet.size;
 
-console.log(`Loaded ${accountsList.length} accounts from accounts_processed.json, ${skipSet.size} skip accounts.`);
+try {
+  const raw = fs.readFileSync(path.join(__dirname, "followers.json"), "utf-8");
+  const parsed = JSON.parse(raw);
+  if (Array.isArray(parsed)) {
+    for (const u of parsed) skipSet.add(String(u).toLowerCase());
+  }
+} catch (err) {
+  if (err.code === "ENOENT") {
+    console.warn("Warning: followers.json not found. Run IG_collect_followers.js to populate it.");
+  } else {
+    console.warn(`Warning: Could not parse followers.json: ${err.message}.`);
+  }
+}
+const followersCount = skipSet.size - skipFileCount;
+
+console.log(`Loaded ${accountsList.length} accounts from accounts_processed.json, ${skipSet.size} protected accounts (${skipFileCount} skip + ${followersCount} followers).`);
 
 // --- Filter and sort candidates ---
 const candidates = accountsList
