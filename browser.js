@@ -1,4 +1,5 @@
 const puppeteer = require("puppeteer");
+require("dotenv").config({ path: __dirname + "/.env" });
 
 const MODE = (process.env.MODE || "prod").toLowerCase();
 const BROWSER_WS = process.env.BROWSERLESS_WS || "ws://browserless:3000";
