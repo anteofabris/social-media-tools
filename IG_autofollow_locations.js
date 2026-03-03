@@ -27,6 +27,7 @@ if (locationList.length === 0) {
 // --- Load accounts processed for cooldown ---
 const MS_PER_DAY = 86400000;
 const COOLDOWN_DAYS = 180;
+const MAX_FOLLOWERS = 10000;
 let accountsList = loadAccountsProcessed();
 const accountsMap = new Map();
 for (const entry of accountsList) {
@@ -152,6 +153,22 @@ async function loadExplorePage(page, locationId) {
     const links = [...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')];
     return links.map((a) => new URL(a.href).pathname);
   });
+}
+
+async function getFollowerCount(page, username) {
+  try {
+    return await page.evaluate(async (user) => {
+      try {
+        const resp = await fetch(`https://www.instagram.com/${user}/`, { credentials: "include" });
+        const html = await resp.text();
+        const match = html.match(/([\d,]+)\s+Followers/i);
+        if (match) return parseInt(match[1].replace(/,/g, ""), 10);
+      } catch {}
+      return null;
+    }, username);
+  } catch {
+    return null;
+  }
 }
 
 // --- Main ---
@@ -286,6 +303,21 @@ async function loadExplorePage(page, locationId) {
                   await randomDelay();
                   continue;
                 }
+              }
+            }
+
+            // Follower count check
+            if (owner) {
+              const followerCount = await getFollowerCount(page, owner);
+              if (followerCount !== null && followerCount >= MAX_FOLLOWERS) {
+                console.log(`  Post ${visitedPaths.size}: @${owner} has ${followerCount.toLocaleString()} followers (>= ${MAX_FOLLOWERS.toLocaleString()}), skipping.`);
+                if (usedLightbox) {
+                  await page.keyboard.press("Escape");
+                  await randomDelay(1000, 2000);
+                  try { await page.waitForFunction(() => !document.querySelector('[role="dialog"] article'), { timeout: 5000 }); } catch { onExplorePage = false; }
+                } else { onExplorePage = false; }
+                await randomDelay();
+                continue;
               }
             }
 
