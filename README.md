@@ -1,15 +1,41 @@
 # threeDollarMethod v2
 
-Puppeteer-based Instagram automation scripts. Each script runs a headless-ish Chrome browser, authenticates via your `sessionid` cookie, and performs a specific action.
+Puppeteer-based Instagram automation scripts. Each script connects to a remote Chromium browser (via [browserless](https://github.com/browserless/chromium)), authenticates via your `sessionid` cookie, and performs a specific action.
 
 ## Prerequisites
 
 - Node.js (v18+)
+- A running browserless/Chromium container (or any Chromium instance exposing a DevTools WebSocket)
 - A valid Instagram `sessionid` cookie (grab it from your browser's dev tools while logged in)
 
 ```bash
 npm install
 ```
+
+## Browser connection
+
+Scripts connect to a remote Chromium instance via WebSocket. The endpoint is configured by the `BROWSERLESS_WS` environment variable:
+
+```
+BROWSERLESS_WS=ws://browserless:3000
+```
+
+| Environment | Value | Notes |
+|-------------|-------|-------|
+| Docker (default) | `ws://browserless:3000` | Container-to-container via Docker network |
+| Local dev | `ws://localhost:3000` | When running browserless locally |
+
+To run browserless locally:
+```bash
+docker run -p 3000:3000 ghcr.io/browserless/chromium
+```
+
+Then run any script:
+```bash
+BROWSERLESS_WS=ws://localhost:3000 node IG_autolike_hashtags.js --hashtags food --count 5
+```
+
+In Docker Compose, the default `ws://browserless:3000` works automatically when the service is named `browserless`.
 
 ## Getting your session cookie
 
@@ -105,7 +131,8 @@ node IG_autounfollow.js --cookie <sessionid> --count 20
 
 ## Notes
 
-- All scripts launch a **visible** Chrome window (`headless: false`) so you can monitor what's happening
+- All scripts connect to a **remote headless** Chromium instance via `browser.js` (shared helper)
 - Random delays are built into every action to mimic human behavior
 - Scripts will stop after a configurable number of consecutive failures (default: 10)
+- Every script outputs a JSON result object as the last line of stdout
 - Location IDs can be found in the URL when browsing a location page on Instagram (e.g. `instagram.com/explore/locations/213385402/`)

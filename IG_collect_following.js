@@ -1,7 +1,6 @@
 const minimist = require("minimist");
 const { connectBrowser } = require("./browser");
-const fs = require("fs");
-const path = require("path");
+const { loadAccountsProcessed, saveAccountsProcessed } = require("./accounts_processed");
 require("dotenv").config({ path: __dirname + "/.env" });
 
 const argv = minimist(process.argv.slice(2));
@@ -11,12 +10,10 @@ const cookie = argv.cookie || process.env.IG_SESSION_COOKIE;
 
 if (!cookie) {
   console.error(
-    "Usage: node IG_set_current_followed_accounts.js --cookie <sessionid>"
+    "Usage: node IG_collect_following.js --cookie <sessionid>"
   );
   process.exit(1);
 }
-
-const skipFilePath = path.join(__dirname, "skip_accounts.json");
 
 // --- Helpers ---
 function randomDelay(min = 2000, max = 5000) {
@@ -46,7 +43,7 @@ async function dismissDialogByText(page, buttonTexts) {
 // --- Main ---
 (async () => {
   let browser, page;
-  const result = { success: true, action: "set_followed_accounts", expectedCount: null, accountsFound: 0, accountsWritten: 0, newAccounts: 0, accounts: [], error: null };
+  const result = { success: true, action: "collect_following", expectedCount: null, accountsFound: 0, accountsWritten: 0, newAccounts: 0, error: null };
 
   try {
     ({ browser, page } = await connectBrowser());
@@ -144,7 +141,7 @@ async function dismissDialogByText(page, buttonTexts) {
     // --- Scroll through the entire following list and collect usernames ---
     const collectedUsernames = new Set();
     let scrollStallCount = 0;
-    const STALL_LIMIT = 8; // stop after this many scrolls that fail to produce new names
+    const STALL_LIMIT = 8;
 
     while (scrollStallCount < STALL_LIMIT) {
       // Extract all visible usernames from the dialog
@@ -188,7 +185,6 @@ async function dismissDialogByText(page, buttonTexts) {
       const scrollResult = await page.evaluate(() => {
         const dialogs = document.querySelectorAll('[role="dialog"]');
         for (const dialog of dialogs) {
-          // Find all scrollable elements and pick the one with actual scroll content
           const allDivs = [...dialog.querySelectorAll("div")];
           let bestScrollable = null;
           let bestScrollHeight = 0;
@@ -197,7 +193,6 @@ async function dismissDialogByText(page, buttonTexts) {
             const overflowY = style.overflowY;
             const isScrollable = (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay");
             if (isScrollable && div.scrollHeight > div.clientHeight) {
-              // Prefer the one with the most scroll content (the actual list)
               if (div.scrollHeight > bestScrollHeight) {
                 bestScrollHeight = div.scrollHeight;
                 bestScrollable = div;
@@ -211,8 +206,6 @@ async function dismissDialogByText(page, buttonTexts) {
               scrolled: true,
               prevTop: prevTop,
               newTop: bestScrollable.scrollTop,
-              scrollHeight: bestScrollable.scrollHeight,
-              clientHeight: bestScrollable.clientHeight,
             };
           }
         }
@@ -223,7 +216,6 @@ async function dismissDialogByText(page, buttonTexts) {
         const didMove = scrollResult.newTop > scrollResult.prevTop;
         if (!didMove && scrollStallCount >= 3) {
           console.log(`  Scroll position did not change — likely at end of list.`);
-          // Give it a couple more tries in case of lazy load delay
         }
       } else {
         console.log("  Warning: Could not find scrollable container in dialog.");
@@ -241,32 +233,36 @@ async function dismissDialogByText(page, buttonTexts) {
       console.warn(`Warning: Expected ${expectedCount} but only found ${collectedUsernames.size}. Some accounts may have been missed.`);
     }
 
-    // --- Merge with existing skip_accounts.json and write ---
-    let existingList = [];
-    try {
-      const raw = fs.readFileSync(skipFilePath, "utf-8");
-      existingList = JSON.parse(raw);
-      if (!Array.isArray(existingList)) existingList = [];
-    } catch {
-      // file missing or invalid — start fresh
+    // --- Merge with existing accounts_processed.json ---
+    const existingList = loadAccountsProcessed();
+    const existingMap = new Map();
+    for (const entry of existingList) {
+      existingMap.set(entry.accountName.toLowerCase(), entry);
     }
 
-    const merged = new Set([
-      ...existingList.map((u) => String(u).toLowerCase()),
-      ...collectedUsernames,
-    ]);
-    const sortedUsernames = [...merged].sort();
+    const now = new Date().toISOString();
+    let newCount = 0;
 
-    const newFromScrape = sortedUsernames.length - existingList.length;
-    fs.writeFileSync(skipFilePath, JSON.stringify(sortedUsernames, null, 2) + "\n", "utf-8");
+    for (const username of collectedUsernames) {
+      if (!existingMap.has(username)) {
+        existingList.push({
+          accountName: username,
+          following: true,
+          dateFollowed: now,
+          dateUnfollowed: null,
+        });
+        newCount++;
+      }
+    }
+
+    saveAccountsProcessed(existingList);
 
     result.accountsFound = collectedUsernames.size;
-    result.accountsWritten = sortedUsernames.length;
-    result.newAccounts = newFromScrape > 0 ? newFromScrape : 0;
-    result.accounts = sortedUsernames;
+    result.accountsWritten = existingList.length;
+    result.newAccounts = newCount;
 
     console.log(
-      `Wrote ${sortedUsernames.length} usernames to ${skipFilePath} (${existingList.length} existing + ${newFromScrape > 0 ? newFromScrape : 0} new)`
+      `Wrote ${existingList.length} entries to accounts_processed.json (${existingList.length - newCount} existing + ${newCount} new)`
     );
   } catch (err) {
     result.success = false;
