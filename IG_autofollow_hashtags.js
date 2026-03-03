@@ -1,5 +1,6 @@
 const minimist = require("minimist");
 const { connectBrowser, createPage } = require("./browser");
+const { loadAccountsProcessed, saveAccountsProcessed } = require("./accounts_processed");
 require("dotenv").config({ path: __dirname + "/.env" });
 
 const argv = minimist(process.argv.slice(2));
@@ -21,6 +22,15 @@ const followCount = Number(count);
 if (hashtagList.length === 0) {
   console.error("Error: provide at least one hashtag");
   process.exit(1);
+}
+
+// --- Load accounts processed for cooldown ---
+const MS_PER_DAY = 86400000;
+const COOLDOWN_DAYS = 180;
+let accountsList = loadAccountsProcessed();
+const accountsMap = new Map();
+for (const entry of accountsList) {
+  accountsMap.set(entry.accountName.toLowerCase(), entry);
 }
 
 // --- Helpers ---
@@ -251,6 +261,35 @@ async function loadExplorePage(page, hashtag) {
             // --- Follow ---
             const owner = await getPostOwner(page);
 
+            // Cooldown check
+            if (owner) {
+              const key = owner.toLowerCase();
+              const existing = accountsMap.get(key);
+              if (existing && existing.following) {
+                console.log(`  Post ${visitedPaths.size}: @${owner} already in our records as following, skipping.`);
+                if (usedLightbox) {
+                  await page.keyboard.press("Escape");
+                  await randomDelay(1000, 2000);
+                  try { await page.waitForFunction(() => !document.querySelector('[role="dialog"] article'), { timeout: 5000 }); } catch { onExplorePage = false; }
+                } else { onExplorePage = false; }
+                await randomDelay();
+                continue;
+              }
+              if (existing && !existing.following && existing.dateUnfollowed) {
+                const daysSinceUnfollow = (Date.now() - new Date(existing.dateUnfollowed).getTime()) / MS_PER_DAY;
+                if (daysSinceUnfollow < COOLDOWN_DAYS) {
+                  console.log(`  Post ${visitedPaths.size}: @${owner} unfollowed ${Math.floor(daysSinceUnfollow)}d ago (cooldown ${COOLDOWN_DAYS}d), skipping.`);
+                  if (usedLightbox) {
+                    await page.keyboard.press("Escape");
+                    await randomDelay(1000, 2000);
+                    try { await page.waitForFunction(() => !document.querySelector('[role="dialog"] article'), { timeout: 5000 }); } catch { onExplorePage = false; }
+                  } else { onExplorePage = false; }
+                  await randomDelay();
+                  continue;
+                }
+              }
+            }
+
             const followResult = await page.evaluate(() => {
               const dialog = document.querySelector('[role="dialog"]');
               const container = dialog || document;
@@ -268,6 +307,22 @@ async function loadExplorePage(page, hashtag) {
               totalFollowed++;
               consecutiveFailures = 0;
               console.log(`  Post ${visitedPaths.size}: followed @${owner || "unknown"} (${hashtagFollowed}/${followCount} for #${hashtag})`);
+
+              // Write-back to accounts_processed
+              if (owner) {
+                const key = owner.toLowerCase();
+                const existing = accountsMap.get(key);
+                if (existing) {
+                  existing.following = true;
+                  existing.dateFollowed = new Date().toISOString();
+                  existing.dateUnfollowed = null;
+                } else {
+                  const entry = { accountName: key, following: true, dateFollowed: new Date().toISOString(), dateUnfollowed: null };
+                  accountsList.push(entry);
+                  accountsMap.set(key, entry);
+                }
+                saveAccountsProcessed(accountsList);
+              }
             } else {
               console.log(`  Post ${visitedPaths.size}: already following @${owner || "unknown"}, skipping.`);
             }
