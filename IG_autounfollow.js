@@ -80,12 +80,22 @@ async function injectCookie(page, cookieValue) {
 async function dismissDialogByText(page, buttonTexts) {
   for (const text of buttonTexts) {
     try {
-      const btn = await page.evaluateHandle((t) => {
-        const buttons = [...document.querySelectorAll("button")];
-        return buttons.find((b) => b.textContent.trim().toLowerCase().includes(t.toLowerCase()));
+      const el = await page.evaluateHandle((t) => {
+        const lower = t.toLowerCase();
+        // Try <button> elements first
+        for (const b of document.querySelectorAll("button")) {
+          if (b.textContent.trim().toLowerCase().includes(lower)) return b;
+        }
+        // Fall back to any leaf element (Instagram uses <div>/<span> for some actions)
+        for (const node of document.querySelectorAll('[role="dialog"] div, [role="dialog"] span')) {
+          if (node.childElementCount === 0 && node.textContent.trim().toLowerCase() === lower) {
+            return node.closest('[role="button"]') || node;
+          }
+        }
+        return null;
       }, text);
-      if (btn && btn.asElement()) {
-        await btn.asElement().click();
+      if (el && el.asElement()) {
+        await el.asElement().click();
         await randomDelay(1000, 2000);
         return true;
       }
@@ -154,6 +164,12 @@ async function ensureConnection(browser, page, cookieValue) {
       const entry = candidates[i];
       const accountName = entry.accountName;
 
+      // Double-check skip list (safety net)
+      if (skipSet.has(accountName.toLowerCase())) {
+        console.log(`\n[${i + 1}/${candidates.length}] @${accountName} is in skip list, skipping.`);
+        continue;
+      }
+
       try {
         console.log(`\n[${i + 1}/${candidates.length}] Visiting @${accountName}...`);
 
@@ -205,11 +221,15 @@ async function ensureConnection(browser, page, cookieValue) {
 
         // Find and click the "Following" button on the profile
         const clickedFollowing = await page.evaluate(() => {
-          const buttons = [...document.querySelectorAll("button")];
-          const followingBtn = buttons.find((b) => b.textContent.trim() === "Following");
-          if (followingBtn) {
-            followingBtn.click();
-            return true;
+          // The "Following" text lives in a <div> inside a <button>, with dynamic class names.
+          // Find any element whose trimmed text is exactly "Following", then click its closest <button>.
+          const allEls = document.querySelectorAll("button, button *");
+          for (const el of allEls) {
+            if (el.childElementCount === 0 && el.textContent.trim() === "Following") {
+              const btn = el.closest("button") || el;
+              btn.click();
+              return true;
+            }
           }
           return false;
         });
