@@ -1,3 +1,4 @@
 node_modules/
 .env
 skip_accounts.json
+accounts_processed.json
