@@ -64,7 +64,7 @@ async function extractPostData(page) {
 
 async function generateComment(imageBase64, captionText) {
   const prompt =
-    "Write a very short, casual Instagram comment (1 sentence under 40 characters). Relate it to the image and/or caption. No hashtags. Do not use exclamation points, quotation marks or apostrophes. Keep it friendly, and make it vague yet intriguing. Reply with ONLY the comment.";
+    "Write a very short, casual Instagram comment (2 to 3 words). Relate it to the image and/or caption. No hashtags. Do not use exclamation points, quotation marks or apostrophes. Keep it friendly, and make it vague yet intriguing. Reply with ONLY the comment.";
 
   const parts = [];
 
