@@ -5,18 +5,22 @@
   "main": "dist/browser.js",
   "scripts": {
     "build": "tsc",
+    "build:seed-map": "tsc -p tools/seed-map-builder/tsconfig.json",
     "clean": "rm -rf dist",
-    "rebuild": "npm run clean && npm run build"
+    "rebuild": "npm run clean && npm run build",
+    "seed-map": "node tools/seed-map-builder/dist/cli.js"
   },
   "dependencies": {
     "@google/genai": "^1.42.0",
+    "better-sqlite3": "^11.7",
     "dotenv": "^17.3.1",
     "minimist": "^1.2.8",
     "puppeteer": "^24.2.1"
   },
   "devDependencies": {
-    "typescript": "^5.7",
+    "@types/better-sqlite3": "^7.6",
+    "@types/minimist": "^1.2",
     "@types/node": "^22",
-    "@types/minimist": "^1.2"
+    "typescript": "^5.7"
   }
 }

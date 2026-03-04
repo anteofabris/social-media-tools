@@ -136,3 +136,77 @@ node IG_autounfollow.js --cookie <sessionid> --count 20
 - Scripts will stop after a configurable number of consecutive failures (default: 10)
 - Every script outputs a JSON result object as the last line of stdout
 - Location IDs can be found in the URL when browsing a location page on Instagram (e.g. `instagram.com/explore/locations/213385402/`)
+
+---
+
+## Seed Map Builder
+
+A CLI tool for building Instagram seed maps for niche music discovery using the **official Instagram Graph API** (no Puppeteer or browser scraping).
+
+Classifies accounts into categories — `band`, `label`, `venue`, `festival`, `visual_aesthetic` — using two-stage classification (keyword heuristics, then Gemini AI fallback). Results are cached in a local SQLite database.
+
+### Environment variables
+
+Add to `.env`:
+
+```
+IG_ACCESS_TOKEN=
+IG_USER_ID=
+GEMINI_API_KEY=
+SEEDMAP_DB_PATH=./tools/seed-map-builder/data/seedmap.sqlite
+SEEDMAP_FOLLOWER_MIN=500
+SEEDMAP_FOLLOWER_MAX=15000
+SEEDMAP_CONFIDENCE_MIN=0.7
+SEEDMAP_CONCURRENCY=3
+SEEDMAP_TOP_MEDIA_PER_TAG=30
+SEEDMAP_RECENT_MEDIA_PER_TAG=30
+SEEDMAP_GEMINI_CACHE_DAYS=30
+```
+
+`IG_ACCESS_TOKEN` and `IG_USER_ID` are required for Graph API calls. Obtain them from the [Meta Developer portal](https://developers.facebook.com/). `GEMINI_API_KEY` is reused from the existing `.env` if already set.
+
+### Setup
+
+```bash
+npm install
+npm run build:seed-map
+```
+
+### Usage
+
+```bash
+# Initialize the database
+npm run seed-map -- init
+
+# Run with specific hashtags (dry run — no API calls)
+npm run seed-map -- run --dryRun --maxHashtags=1
+
+# Run ingestion
+npm run seed-map -- run --hashtags=artmusic,psychedelicfunk
+
+# Run with defaults from hashtags.txt
+npm run seed-map -- run --maxHashtags=5 --topN=20 --recentN=20
+
+# Force re-classification (ignore Gemini cache)
+npm run seed-map -- run --hashtags=shoegaze --force
+
+# Export seed maps to JSON
+npm run seed-map -- export
+
+# View statistics
+npm run seed-map -- stats
+```
+
+### Output
+
+Exported JSON files are written to `tools/seed-map-builder/output/`:
+
+- `seed_map_bands.json`
+- `seed_map_labels.json`
+- `seed_map_venues.json`
+- `seed_map_festivals.json`
+- `seed_map_visual.json`
+
+### Hashtag input
+
+Edit `tools/seed-map-builder/hashtags.txt` (one hashtag per line, `#` for comments) or use `--hashtags=tag1,tag2` at runtime.

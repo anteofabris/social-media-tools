@@ -9,12 +9,12 @@ import dotenv from "dotenv";
 
 dotenv.config({ path: `${PROJECT_ROOT}/.env` });
 
-const argv = minimist(process.argv.slice(2));
+const argv = minimist(process.argv.slice(2), { string: ["locations", "cookie"] });
 
 const { locations, count = 50 } = argv;
-const cookie: string = argv.cookie || process.env.IG_SESSION_COOKIE;
+const cookie: string = argv.cookie || process.env.IG_SESSION_COOKIE || "";
 
-if (!cookie || !locations) {
+if (!cookie || typeof locations !== "string" || !locations) {
   console.error(
     "Usage: node IG_autolike_locations.js --cookie <sessionid> --locations 213385402,12345678 [--count 50]"
   );

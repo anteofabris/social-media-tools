@@ -4,3 +4,7 @@ dist/
 skip_accounts.json
 accounts_processed.json
 followers.json
+tools/seed-map-builder/output/
+tools/seed-map-builder/data/
+tools/seed-map-builder/dist/
+*.sqlite

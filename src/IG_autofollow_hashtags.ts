@@ -10,12 +10,12 @@ import dotenv from "dotenv";
 
 dotenv.config({ path: `${PROJECT_ROOT}/.env` });
 
-const argv = minimist(process.argv.slice(2));
+const argv = minimist(process.argv.slice(2), { string: ["hashtags", "cookie"] });
 
 const { hashtags, count = 50 } = argv;
-const cookie: string = argv.cookie || process.env.IG_SESSION_COOKIE;
+const cookie: string = argv.cookie || process.env.IG_SESSION_COOKIE || "";
 
-if (!cookie || !hashtags) {
+if (!cookie || typeof hashtags !== "string" || !hashtags) {
   console.error(
     "Usage: node IG_autofollow_hashtags.js --cookie <sessionid> --hashtags tag1,tag2 [--count 50]"
   );

@@ -1,0 +1,21 @@
+# Seed map hashtags — one per line
+# Lines starting with # are comments
+
+# Genre tags
+artmusic
+psychedelicfunk
+indierock
+shoegaze
+dreampop
+postpunk
+synthwave
+lofi
+jazzfusion
+experimentalmusic
+
+# Scene tags
+undergroundmusic
+diybands
+indielabel
+livemusic
+localmusic
