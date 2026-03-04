@@ -1,11 +1,15 @@
-const puppeteer = require("puppeteer");
-require("dotenv").config({ path: __dirname + "/.env" });
+import puppeteer, { Browser, Page } from "puppeteer";
+import path from "path";
+import dotenv from "dotenv";
+import type { BrowserConnection } from "./types";
+
+dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
 const MODE = (process.env.MODE || "prod").toLowerCase();
 const BROWSER_WS = process.env.BROWSERLESS_WS || "ws://browserless:3000";
 
-async function connectBrowser() {
-  let browser;
+export async function connectBrowser(): Promise<BrowserConnection> {
+  let browser: Browser;
 
   if (MODE === "dev") {
     try {
@@ -13,8 +17,8 @@ async function connectBrowser() {
         headless: false,
         args: ["--no-sandbox", "--disable-setuid-sandbox"],
       });
-    } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`Failed to launch local browser: ${msg}`);
     }
   } else {
@@ -22,8 +26,8 @@ async function connectBrowser() {
       browser = await puppeteer.connect({
         browserWSEndpoint: BROWSER_WS,
       });
-    } catch (err) {
-      const msg = err && err.message ? err.message : String(err);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`Failed to connect to browserless at ${BROWSER_WS}: ${msg}`);
     }
   }
@@ -37,7 +41,7 @@ async function connectBrowser() {
   return { browser, page };
 }
 
-async function createPage(browser) {
+export async function createPage(browser: Browser): Promise<Page> {
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 900 });
   await page.setUserAgent(
@@ -45,5 +49,3 @@ async function createPage(browser) {
   );
   return page;
 }
-
-module.exports = { connectBrowser, createPage };

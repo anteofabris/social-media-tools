@@ -1,15 +1,20 @@
-const minimist = require("minimist");
-const { connectBrowser, createPage } = require("./browser");
-const { loadAccountsProcessed, saveAccountsProcessed } = require("./accounts_processed");
-const fs = require("fs");
-const path = require("path");
-require("dotenv").config({ path: __dirname + "/.env" });
+import minimist from "minimist";
+import fs from "fs";
+import path from "path";
+import { connectBrowser } from "./browser";
+import { loadAccountsProcessed, saveAccountsProcessed } from "./accounts_processed";
+import {
+  randomDelay, injectCookie, dismissDialogByText, ensureConnection, PROJECT_ROOT,
+} from "./helpers";
+import type { AutounfollowResult } from "./types";
+import dotenv from "dotenv";
+
+dotenv.config({ path: `${PROJECT_ROOT}/.env` });
 
 const argv = minimist(process.argv.slice(2));
 
-// --- Validate CLI args ---
 const { count = 50 } = argv;
-const cookie = argv.cookie || process.env.IG_SESSION_COOKIE;
+const cookie: string = argv.cookie || process.env.IG_SESSION_COOKIE;
 
 if (!cookie) {
   console.error(
@@ -20,51 +25,50 @@ if (!cookie) {
 
 const unfollowCount = Number(count);
 
-// --- Load accounts_processed.json ---
 let accountsList = loadAccountsProcessed();
 if (accountsList.length === 0) {
   console.error("Error: accounts_processed.json is missing or empty. Run IG_collect_following.js first.");
   process.exit(1);
 }
 
-// --- Load skip list (skip_accounts.json + followers.json) ---
-let skipSet = new Set();
+let skipSet = new Set<string>();
 try {
-  const raw = fs.readFileSync(path.join(__dirname, "skip_accounts.json"), "utf-8");
+  const raw = fs.readFileSync(path.join(PROJECT_ROOT, "skip_accounts.json"), "utf-8");
   const parsed = JSON.parse(raw);
   if (Array.isArray(parsed)) {
     for (const u of parsed) skipSet.add(String(u).toLowerCase());
   }
-} catch (err) {
-  if (err.code === "ENOENT") {
+} catch (err: unknown) {
+  const e = err as NodeJS.ErrnoException;
+  if (e.code === "ENOENT") {
     console.warn("Warning: skip_accounts.json not found.");
   } else {
-    console.warn(`Warning: Could not parse skip_accounts.json: ${err.message}.`);
+    console.warn(`Warning: Could not parse skip_accounts.json: ${e.message}.`);
   }
 }
 const skipFileCount = skipSet.size;
 
 try {
-  const raw = fs.readFileSync(path.join(__dirname, "followers.json"), "utf-8");
+  const raw = fs.readFileSync(path.join(PROJECT_ROOT, "followers.json"), "utf-8");
   const parsed = JSON.parse(raw);
   if (Array.isArray(parsed)) {
     for (const u of parsed) skipSet.add(String(u).toLowerCase());
   }
-} catch (err) {
-  if (err.code === "ENOENT") {
+} catch (err: unknown) {
+  const e = err as NodeJS.ErrnoException;
+  if (e.code === "ENOENT") {
     console.warn("Warning: followers.json not found. Run IG_collect_followers.js to populate it.");
   } else {
-    console.warn(`Warning: Could not parse followers.json: ${err.message}.`);
+    console.warn(`Warning: Could not parse followers.json: ${e.message}.`);
   }
 }
 const followersCount = skipSet.size - skipFileCount;
 
 console.log(`Loaded ${accountsList.length} accounts from accounts_processed.json, ${skipSet.size} protected accounts (${skipFileCount} skip + ${followersCount} followers).`);
 
-// --- Filter and sort candidates ---
 const candidates = accountsList
   .filter((e) => e.following === true && !skipSet.has(e.accountName.toLowerCase()))
-  .sort((a, b) => new Date(a.dateFollowed) - new Date(b.dateFollowed))
+  .sort((a, b) => new Date(a.dateFollowed).getTime() - new Date(b.dateFollowed).getTime())
   .slice(0, unfollowCount);
 
 if (candidates.length === 0) {
@@ -74,83 +78,10 @@ if (candidates.length === 0) {
 
 console.log(`Selected ${candidates.length} candidates (oldest followed first).`);
 
-// --- Helpers ---
-function randomDelay(min = 2000, max = 5000) {
-  const ms = Math.floor(Math.random() * (max - min + 1)) + min;
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function injectCookie(page, cookieValue) {
-  await page.setCookie({
-    name: "sessionid",
-    value: String(cookieValue),
-    domain: ".instagram.com",
-    path: "/",
-    httpOnly: true,
-    secure: true,
-    sameSite: "None",
-  });
-}
-
-async function dismissDialogByText(page, buttonTexts) {
-  for (const text of buttonTexts) {
-    try {
-      const el = await page.evaluateHandle((t) => {
-        const lower = t.toLowerCase();
-        // Try <button> elements first
-        for (const b of document.querySelectorAll("button")) {
-          if (b.textContent.trim().toLowerCase().includes(lower)) return b;
-        }
-        // Fall back to any leaf element (Instagram uses <div>/<span> for some actions)
-        for (const node of document.querySelectorAll('[role="dialog"] div, [role="dialog"] span')) {
-          if (node.childElementCount === 0 && node.textContent.trim().toLowerCase() === lower) {
-            return node.closest('[role="button"]') || node;
-          }
-        }
-        return null;
-      }, text);
-      if (el && el.asElement()) {
-        await el.asElement().click();
-        await randomDelay(1000, 2000);
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return false;
-}
-
-async function ensureConnection(browser, page, cookieValue) {
-  try {
-    await page.evaluate(() => true);
-    return { browser, page };
-  } catch {
-    console.log("  Page is dead, attempting recovery...");
-  }
-
-  try {
-    try { await page.close(); } catch {}
-    const newPage = await createPage(browser);
-    await injectCookie(newPage, cookieValue);
-    console.log("  Created new page on existing browser.");
-    return { browser, page: newPage };
-  } catch {
-    console.log("  Browser connection lost, reconnecting...");
-  }
-
-  try { await browser.close(); } catch {}
-  const conn = await connectBrowser();
-  await injectCookie(conn.page, cookieValue);
-  console.log("  Reconnected to browser.");
-  return conn;
-}
-
-// --- Main ---
 (async () => {
   let browser, page;
   let totalUnfollowed = 0;
-  const result = { success: true, action: "autounfollow", requested: unfollowCount, totalUnfollowed: 0, unfollowed: [], skippedFollowsBack: [], skippedInvalid: [], error: null };
+  const result: AutounfollowResult = { success: true, action: "autounfollow", requested: unfollowCount, totalUnfollowed: 0, unfollowed: [], skippedFollowsBack: [], skippedInvalid: [], error: null };
 
   try {
     ({ browser, page } = await connectBrowser());
@@ -171,7 +102,6 @@ async function ensureConnection(browser, page, cookieValue) {
     }
     console.log("Logged in via session cookie.");
 
-    // --- Visit each candidate's profile ---
     let consecutiveFailures = 0;
     const FAILURE_LIMIT = 10;
 
@@ -179,7 +109,6 @@ async function ensureConnection(browser, page, cookieValue) {
       const entry = candidates[i];
       const accountName = entry.accountName;
 
-      // Double-check skip list (safety net)
       if (skipSet.has(accountName.toLowerCase())) {
         console.log(`\n[${i + 1}/${candidates.length}] @${accountName} is in skip list, skipping.`);
         continue;
@@ -193,14 +122,11 @@ async function ensureConnection(browser, page, cookieValue) {
 
         await dismissDialogByText(page, ["not now", "cancel"]);
 
-        // Check if page is valid (not 404/suspended)
         const pageStatus = await page.evaluate(() => {
-          // Check for "Sorry, this page isn't available" or similar
           const body = document.body.innerText;
           if (body.includes("Sorry, this page isn't available") || body.includes("this page isn't available")) {
             return "not_found";
           }
-          // Check for suspended/restricted
           if (body.includes("This account has been suspended") || body.includes("Restricted account")) {
             return "suspended";
           }
@@ -215,11 +141,10 @@ async function ensureConnection(browser, page, cookieValue) {
           continue;
         }
 
-        // Check for "Follows you" indicator
         const followsBack = await page.evaluate(() => {
           const texts = document.querySelectorAll("span, div");
           for (const el of texts) {
-            if (el.childElementCount === 0 && el.textContent.trim().toLowerCase() === "follows you") {
+            if (el.childElementCount === 0 && el.textContent!.trim().toLowerCase() === "follows you") {
               return true;
             }
           }
@@ -234,15 +159,12 @@ async function ensureConnection(browser, page, cookieValue) {
           continue;
         }
 
-        // Find and click the "Following" button on the profile
         const clickedFollowing = await page.evaluate(() => {
-          // The "Following" text lives in a <div> inside a <button>, with dynamic class names.
-          // Find any element whose trimmed text is exactly "Following", then click its closest <button>.
           const allEls = document.querySelectorAll("button, button *");
           for (const el of allEls) {
-            if (el.childElementCount === 0 && el.textContent.trim() === "Following") {
-              const btn = el.closest("button") || el;
-              btn.click();
+            if (el.childElementCount === 0 && el.textContent!.trim() === "Following") {
+              const btn = (el as HTMLElement).closest("button") || el;
+              (btn as HTMLElement).click();
               return true;
             }
           }
@@ -259,7 +181,6 @@ async function ensureConnection(browser, page, cookieValue) {
 
         await randomDelay(1000, 2000);
 
-        // Confirm unfollow in the dialog
         const confirmed = await dismissDialogByText(page, ["unfollow"]);
 
         if (!confirmed) {
@@ -272,7 +193,6 @@ async function ensureConnection(browser, page, cookieValue) {
           continue;
         }
 
-        // Update accounts_processed.json
         entry.following = false;
         entry.dateUnfollowed = new Date().toISOString();
         saveAccountsProcessed(accountsList);
@@ -283,9 +203,10 @@ async function ensureConnection(browser, page, cookieValue) {
         console.log(`  @${accountName}: unfollowed (${totalUnfollowed}/${unfollowCount})`);
 
         await randomDelay();
-      } catch (err) {
+      } catch (err: unknown) {
         consecutiveFailures++;
-        console.log(`  @${accountName}: error — ${err.message}. (${consecutiveFailures}/${FAILURE_LIMIT})`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`  @${accountName}: error — ${msg}. (${consecutiveFailures}/${FAILURE_LIMIT})`);
 
         if (consecutiveFailures >= FAILURE_LIMIT) {
           throw new Error(`Reached ${FAILURE_LIMIT} consecutive failures`);
@@ -293,17 +214,18 @@ async function ensureConnection(browser, page, cookieValue) {
 
         try {
           ({ browser, page } = await ensureConnection(browser, page, cookie));
-        } catch (reconnErr) {
-          console.log(`  Cannot recover connection: ${reconnErr.message}. Stopping.`);
+        } catch (reconnErr: unknown) {
+          const reconnMsg = reconnErr instanceof Error ? reconnErr.message : String(reconnErr);
+          console.log(`  Cannot recover connection: ${reconnMsg}. Stopping.`);
           break;
         }
 
         await randomDelay(2000, 3000);
       }
     }
-  } catch (err) {
+  } catch (err: unknown) {
     result.success = false;
-    result.error = err.message;
+    result.error = err instanceof Error ? err.message : String(err);
   } finally {
     result.totalUnfollowed = totalUnfollowed;
     console.log(JSON.stringify(result));

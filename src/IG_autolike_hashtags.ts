@@ -1,12 +1,18 @@
-const minimist = require("minimist");
-const { connectBrowser, createPage } = require("./browser");
-require("dotenv").config({ path: __dirname + "/.env" });
+import minimist from "minimist";
+import { connectBrowser } from "./browser";
+import {
+  randomDelay, injectCookie, dismissDialogByText, ensureConnection,
+  getPostOwner, loadExplorePage, getLikeCount, PROJECT_ROOT,
+} from "./helpers";
+import type { AutolikeHashtagResult } from "./types";
+import dotenv from "dotenv";
+
+dotenv.config({ path: `${PROJECT_ROOT}/.env` });
 
 const argv = minimist(process.argv.slice(2));
 
-// --- Validate CLI args ---
 const { hashtags, count = 50 } = argv;
-const cookie = argv.cookie || process.env.IG_SESSION_COOKIE;
+const cookie: string = argv.cookie || process.env.IG_SESSION_COOKIE;
 
 if (!cookie || !hashtags) {
   console.error(
@@ -23,162 +29,10 @@ if (hashtagList.length === 0) {
   process.exit(1);
 }
 
-// --- Helpers ---
-function randomDelay(min = 2000, max = 5000) {
-  const ms = Math.floor(Math.random() * (max - min + 1)) + min;
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function injectCookie(page, cookieValue) {
-  await page.setCookie({
-    name: "sessionid",
-    value: String(cookieValue),
-    domain: ".instagram.com",
-    path: "/",
-    httpOnly: true,
-    secure: true,
-    sameSite: "None",
-  });
-}
-
-async function dismissDialogByText(page, buttonTexts) {
-  for (const text of buttonTexts) {
-    try {
-      const btn = await page.evaluateHandle((t) => {
-        const buttons = [...document.querySelectorAll("button")];
-        return buttons.find((b) => b.textContent.trim().toLowerCase().includes(t.toLowerCase()));
-      }, text);
-      if (btn && btn.asElement()) {
-        await btn.asElement().click();
-        await randomDelay(1000, 2000);
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return false;
-}
-
-async function ensureConnection(browser, page, cookieValue) {
-  try {
-    await page.evaluate(() => true);
-    return { browser, page };
-  } catch {
-    console.log("  Page is dead, attempting recovery...");
-  }
-
-  try {
-    try { await page.close(); } catch {}
-    const newPage = await createPage(browser);
-    await injectCookie(newPage, cookieValue);
-    console.log("  Created new page on existing browser.");
-    return { browser, page: newPage };
-  } catch {
-    console.log("  Browser connection lost, reconnecting...");
-  }
-
-  try { await browser.close(); } catch {}
-  const conn = await connectBrowser();
-  await injectCookie(conn.page, cookieValue);
-  console.log("  Reconnected to browser.");
-  return conn;
-}
-
-async function getPostOwner(page) {
-  try {
-    return await page.evaluate(() => {
-      const dialog = document.querySelector('[role="dialog"]');
-      const container = dialog || document;
-      const article = container.querySelector('article');
-      if (!article) return null;
-      const links = article.querySelectorAll('header a[href]');
-      for (const link of links) {
-        const match = link.getAttribute('href').match(/^\/([a-zA-Z0-9._]+)\/?$/);
-        if (match) return match[1];
-      }
-      for (const link of article.querySelectorAll('a[href]')) {
-        const href = link.getAttribute('href');
-        if (href.includes('/p/') || href.includes('/reel/') || href.includes('/explore/') || href.includes('/accounts/')) continue;
-        const match = href.match(/^\/([a-zA-Z0-9._]+)\/?$/);
-        if (match) return match[1];
-      }
-      return null;
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function getLikeCount(page) {
-  try {
-    return await page.evaluate(() => {
-      const dialog = document.querySelector('[role="dialog"]');
-      const container = dialog || document;
-      const article = container.querySelector('article');
-      if (!article) return null;
-
-      const likedByLink = article.querySelector('a[href*="liked_by"]');
-      if (likedByLink) {
-        const num = likedByLink.textContent.replace(/[^0-9]/g, '');
-        if (num) return parseInt(num, 10);
-      }
-
-      const sections = article.querySelectorAll('section');
-      for (const sec of sections) {
-        const match = sec.textContent.match(/([\d,]+)\s+likes?\b/i);
-        if (match) return parseInt(match[1].replace(/,/g, ''), 10);
-      }
-
-      const othersMatch = article.textContent.match(/and\s+([\d,]+)\s+others?\b/i);
-      if (othersMatch) return parseInt(othersMatch[1].replace(/,/g, ''), 10) + 1;
-
-      return null;
-    });
-  } catch {
-    return null;
-  }
-}
-
-async function scrollToLoadPosts(page, targetCount = 100) {
-  let lastCount = 0;
-  for (let attempt = 0; attempt < 30; attempt++) {
-    const count = await page.evaluate(
-      () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length
-    );
-    if (count >= targetCount) break;
-    if (count === lastCount && attempt > 0) break;
-    lastCount = count;
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-    await randomDelay(1500, 2500);
-  }
-}
-
-async function loadExplorePage(page, hashtag) {
-  await page.goto(
-    `https://www.instagram.com/explore/tags/${hashtag}/`,
-    { waitUntil: "networkidle2" }
-  );
-  await randomDelay(3000, 5000);
-
-  await page.waitForFunction(
-    () => document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]').length > 0,
-    { timeout: 15000 }
-  );
-
-  await scrollToLoadPosts(page);
-
-  return page.evaluate(() => {
-    const links = [...document.querySelectorAll('a[href*="/p/"], a[href*="/reel/"]')];
-    return links.map((a) => new URL(a.href).pathname);
-  });
-}
-
-// --- Main ---
 (async () => {
   let browser, page;
   let totalLiked = 0;
-  const result = { success: true, action: "autolike_hashtags", hashtags: hashtagList, requested: likeCount, totalLiked: 0, details: [], error: null };
+  const result: AutolikeHashtagResult = { success: true, action: "autolike_hashtags", hashtags: hashtagList, requested: likeCount, totalLiked: 0, details: [], error: null };
 
   try {
     ({ browser, page } = await connectBrowser());
@@ -199,19 +53,18 @@ async function loadExplorePage(page, hashtag) {
     }
     console.log("Logged in via session cookie.");
 
-    // --- Process each hashtag ---
     for (const hashtag of hashtagList) {
       console.log(`\n--- Hashtag: #${hashtag} ---`);
       let hashtagLiked = 0;
 
       try {
-        const visitedPaths = new Set();
+        const visitedPaths = new Set<string>();
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
         const MAX_ROUNDS = 5;
 
         for (let round = 1; round <= MAX_ROUNDS && hashtagLiked < likeCount; round++) {
-          const postPaths = await loadExplorePage(page, hashtag);
+          const postPaths = await loadExplorePage(page, hashtag, "explore/tags");
 
           if (postPaths.length === 0) {
             console.log(`  No posts found for #${hashtag}.`);
@@ -237,7 +90,6 @@ async function loadExplorePage(page, hashtag) {
             visitedPaths.add(postPath);
 
           try {
-            // --- 1. Ensure we're on the explore page ---
             if (!onExplorePage) {
               await page.goto(
                 `https://www.instagram.com/explore/tags/${hashtag}/`,
@@ -247,15 +99,14 @@ async function loadExplorePage(page, hashtag) {
               onExplorePage = true;
             }
 
-            // --- 2. Click the post link (SPA navigation → lightbox) ---
             const navPromise = page
               .waitForNavigation({ waitUntil: "networkidle2", timeout: 10000 })
               .catch(() => null);
 
-            const clicked = await page.evaluate((path) => {
+            const clicked = await page.evaluate((path: string) => {
               const link = document.querySelector(`a[href="${path}"]`);
               if (!link) return false;
-              link.click();
+              (link as HTMLElement).click();
               return true;
             }, postPath);
 
@@ -265,7 +116,6 @@ async function loadExplorePage(page, hashtag) {
               continue;
             }
 
-            // --- 3. Wait for lightbox or full-page navigation (Reels) ---
             let usedLightbox = false;
             try {
               await page.waitForFunction(
@@ -281,7 +131,6 @@ async function loadExplorePage(page, hashtag) {
 
             await dismissDialogByText(page, ["not now", "cancel"]);
 
-            // --- 4. Like ---
             const owner = await getPostOwner(page);
 
             const alreadyLiked = await page.evaluate(() => {
@@ -300,7 +149,7 @@ async function loadExplorePage(page, hashtag) {
                   const likeSvg = document.querySelector('section svg[aria-label="Like"]');
                   if (likeSvg) {
                     const btn = likeSvg.closest("button") || likeSvg.parentElement;
-                    btn.click();
+                    (btn as HTMLElement).click();
                   }
                 });
                 hashtagLiked++;
@@ -310,7 +159,6 @@ async function loadExplorePage(page, hashtag) {
               }
             }
 
-            // --- 5. Close lightbox (or flag for re-nav) ---
             if (usedLightbox) {
               await page.keyboard.press("Escape");
               await randomDelay(1000, 2000);
@@ -327,10 +175,11 @@ async function loadExplorePage(page, hashtag) {
             }
 
             await randomDelay();
-          } catch (err) {
+          } catch (err: unknown) {
             consecutiveFailures++;
+            const msg = err instanceof Error ? err.message : String(err);
             console.log(
-              `  Post ${visitedPaths.size}: error — ${err.message}. (${consecutiveFailures}/${FAILURE_LIMIT})`
+              `  Post ${visitedPaths.size}: error — ${msg}. (${consecutiveFailures}/${FAILURE_LIMIT})`
             );
 
             if (consecutiveFailures >= FAILURE_LIMIT) {
@@ -340,8 +189,9 @@ async function loadExplorePage(page, hashtag) {
             try {
               ({ browser, page } = await ensureConnection(browser, page, cookie));
               onExplorePage = false;
-            } catch (reconnErr) {
-              console.log(`  Cannot recover connection: ${reconnErr.message}. Moving on.`);
+            } catch (reconnErr: unknown) {
+              const reconnMsg = reconnErr instanceof Error ? reconnErr.message : String(reconnErr);
+              console.log(`  Cannot recover connection: ${reconnMsg}. Moving on.`);
               break;
             }
 
@@ -352,14 +202,15 @@ async function loadExplorePage(page, hashtag) {
 
         console.log(`  Finished #${hashtag}: ${hashtagLiked} posts liked.`);
         result.details.push({ hashtag, liked: hashtagLiked });
-      } catch (err) {
-        console.log(`  Error processing #${hashtag}: ${err.message}. Skipping.`);
-        result.details.push({ hashtag, liked: hashtagLiked, error: err.message });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.log(`  Error processing #${hashtag}: ${msg}. Skipping.`);
+        result.details.push({ hashtag, liked: hashtagLiked, error: msg });
       }
     }
-  } catch (err) {
+  } catch (err: unknown) {
     result.success = false;
-    result.error = err.message;
+    result.error = err instanceof Error ? err.message : String(err);
   } finally {
     result.totalLiked = totalLiked;
     console.log(JSON.stringify(result));

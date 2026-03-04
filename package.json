@@ -1,15 +1,22 @@
 {
   "name": "three-dollar-method-v2",
   "version": "2.0.0",
-  "description": "Puppeteer-based Instagram auto-liker",
-  "main": "index.js",
+  "description": "Puppeteer-based Instagram automation toolkit",
+  "main": "dist/browser.js",
   "scripts": {
-    "start": "node index.js"
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "rebuild": "npm run clean && npm run build"
   },
   "dependencies": {
     "@google/genai": "^1.42.0",
     "dotenv": "^17.3.1",
     "minimist": "^1.2.8",
     "puppeteer": "^24.2.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.7",
+    "@types/node": "^22",
+    "@types/minimist": "^1.2"
   }
 }

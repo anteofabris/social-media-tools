@@ -1,13 +1,16 @@
-const minimist = require("minimist");
-const { connectBrowser } = require("./browser");
-const fs = require("fs");
-const path = require("path");
-require("dotenv").config({ path: __dirname + "/.env" });
+import minimist from "minimist";
+import fs from "fs";
+import path from "path";
+import { connectBrowser } from "./browser";
+import { randomDelay, injectCookie, dismissDialogByText, PROJECT_ROOT } from "./helpers";
+import type { CollectFollowersResult } from "./types";
+import dotenv from "dotenv";
+
+dotenv.config({ path: `${PROJECT_ROOT}/.env` });
 
 const argv = minimist(process.argv.slice(2));
 
-// --- Validate CLI args ---
-const cookie = argv.cookie || process.env.IG_SESSION_COOKIE;
+const cookie: string = argv.cookie || process.env.IG_SESSION_COOKIE;
 
 if (!cookie) {
   console.error(
@@ -16,52 +19,17 @@ if (!cookie) {
   process.exit(1);
 }
 
-const followersFilePath = path.join(__dirname, "followers.json");
+const followersFilePath = path.join(PROJECT_ROOT, "followers.json");
 
-// --- Helpers ---
-function randomDelay(min = 2000, max = 5000) {
-  const ms = Math.floor(Math.random() * (max - min + 1)) + min;
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function dismissDialogByText(page, buttonTexts) {
-  for (const text of buttonTexts) {
-    try {
-      const btn = await page.evaluateHandle((t) => {
-        const buttons = [...document.querySelectorAll("button")];
-        return buttons.find((b) => b.textContent.trim().toLowerCase().includes(t.toLowerCase()));
-      }, text);
-      if (btn && btn.asElement()) {
-        await btn.asElement().click();
-        await randomDelay(1000, 2000);
-        return true;
-      }
-    } catch {
-      // ignore
-    }
-  }
-  return false;
-}
-
-// --- Main ---
 (async () => {
   let browser, page;
-  const result = { success: true, action: "collect_followers", expectedCount: null, accountsFound: 0, error: null };
+  const result: CollectFollowersResult = { success: true, action: "collect_followers", expectedCount: null, accountsFound: 0, error: null };
 
   try {
     ({ browser, page } = await connectBrowser());
 
-    // --- Inject session cookie and navigate ---
     console.log("Setting session cookie...");
-    await page.setCookie({
-      name: "sessionid",
-      value: String(cookie),
-      domain: ".instagram.com",
-      path: "/",
-      httpOnly: true,
-      secure: true,
-      sameSite: "None",
-    });
+    await injectCookie(page, cookie);
 
     console.log("Navigating to Instagram...");
     await page.goto("https://www.instagram.com/", { waitUntil: "networkidle2" });
@@ -76,7 +44,6 @@ async function dismissDialogByText(page, buttonTexts) {
     }
     console.log("Logged in via session cookie.");
 
-    // --- Get profile URL from the sidebar/nav ---
     console.log("Finding profile link...");
     const profilePath = await page.evaluate(() => {
       const knownPaths = ["/explore/", "/reels/", "/direct/", "/accounts/", "/p/", "/reel/", "/stories/"];
@@ -96,15 +63,13 @@ async function dismissDialogByText(page, buttonTexts) {
     }
     console.log(`Found profile: ${profilePath}`);
 
-    // --- Navigate to profile page ---
     await page.goto(`https://www.instagram.com${profilePath}`, { waitUntil: "networkidle2" });
     await randomDelay(2000, 3000);
 
-    // --- Read the expected followers count from the profile page ---
-    const expectedCount = await page.evaluate((profPath) => {
+    const expectedCount = await page.evaluate((profPath: string) => {
       const link = document.querySelector(`a[href="${profPath}followers/"]`);
       if (!link) return null;
-      const text = link.textContent.replace(/,/g, "").trim();
+      const text = link.textContent!.replace(/,/g, "").trim();
       const match = text.match(/(\d+)/);
       return match ? parseInt(match[1], 10) : null;
     }, profilePath);
@@ -116,7 +81,6 @@ async function dismissDialogByText(page, buttonTexts) {
       console.warn("Warning: Could not read followers count from profile page.");
     }
 
-    // --- Click the "followers" count link ---
     console.log("Opening followers list...");
     const followersLink = await page.$(`a[href="${profilePath}followers/"]`);
     if (!followersLink) {
@@ -125,7 +89,6 @@ async function dismissDialogByText(page, buttonTexts) {
     await followersLink.click();
     await randomDelay(2000, 3000);
 
-    // Wait for the followers list dialog to appear
     await page.waitForFunction(
       () => {
         const dialogs = document.querySelectorAll('[role="dialog"]');
@@ -139,20 +102,19 @@ async function dismissDialogByText(page, buttonTexts) {
     );
     console.log("Followers list opened. Collecting usernames...");
 
-    // --- Scroll through the entire followers list and collect usernames ---
-    const collectedUsernames = new Set();
+    const collectedUsernames = new Set<string>();
     let scrollStallCount = 0;
     const STALL_LIMIT = 8;
 
     while (scrollStallCount < STALL_LIMIT) {
       const usernames = await page.evaluate(() => {
-        const results = [];
+        const results: string[] = [];
         const dialogs = document.querySelectorAll('[role="dialog"]');
         for (const dialog of dialogs) {
           const links = dialog.querySelectorAll('a[href*="/"]');
           for (const link of links) {
             const href = link.getAttribute("href");
-            const match = href.match(/^\/([a-zA-Z0-9._]+)\/?$/);
+            const match = href?.match(/^\/([a-zA-Z0-9._]+)\/?$/);
             if (match) {
               results.push(match[1]);
             }
@@ -180,12 +142,11 @@ async function dismissDialogByText(page, buttonTexts) {
         break;
       }
 
-      // Scroll the dialog
       const scrollResult = await page.evaluate(() => {
         const dialogs = document.querySelectorAll('[role="dialog"]');
         for (const dialog of dialogs) {
           const allDivs = [...dialog.querySelectorAll("div")];
-          let bestScrollable = null;
+          let bestScrollable: HTMLDivElement | null = null;
           let bestScrollHeight = 0;
           for (const div of allDivs) {
             const style = window.getComputedStyle(div);
@@ -199,16 +160,16 @@ async function dismissDialogByText(page, buttonTexts) {
             }
           }
           if (bestScrollable) {
-            const prevTop = bestScrollable.scrollTop;
-            bestScrollable.scrollTop = bestScrollable.scrollHeight;
+            const prevTop = (bestScrollable as HTMLDivElement).scrollTop;
+            (bestScrollable as HTMLDivElement).scrollTop = (bestScrollable as HTMLDivElement).scrollHeight;
             return {
               scrolled: true,
               prevTop: prevTop,
-              newTop: bestScrollable.scrollTop,
+              newTop: (bestScrollable as HTMLDivElement).scrollTop,
             };
           }
         }
-        return { scrolled: false };
+        return { scrolled: false, prevTop: 0, newTop: 0 };
       });
 
       if (scrollResult.scrolled) {
@@ -223,7 +184,6 @@ async function dismissDialogByText(page, buttonTexts) {
       await randomDelay(1500, 2500);
     }
 
-    // Remove own username from the list
     const ownUsername = profilePath.replace(/\//g, "").toLowerCase();
     collectedUsernames.delete(ownUsername);
 
@@ -232,15 +192,14 @@ async function dismissDialogByText(page, buttonTexts) {
       console.warn(`Warning: Expected ${expectedCount} but only found ${collectedUsernames.size}. Some accounts may have been missed.`);
     }
 
-    // --- Write to followers.json ---
     const sortedFollowers = [...collectedUsernames].sort();
     fs.writeFileSync(followersFilePath, JSON.stringify(sortedFollowers, null, 2) + "\n", "utf-8");
 
     result.accountsFound = sortedFollowers.length;
     console.log(`Wrote ${sortedFollowers.length} followers to followers.json`);
-  } catch (err) {
+  } catch (err: unknown) {
     result.success = false;
-    result.error = err.message;
+    result.error = err instanceof Error ? err.message : String(err);
   } finally {
     console.log(JSON.stringify(result));
     if (browser) await browser.close();
