@@ -3,7 +3,7 @@ import { connectBrowser } from "./browser";
 import { getAIComment } from "./gemini_comment";
 import {
   randomDelay, injectCookie, dismissDialogByText, ensureConnection,
-  getPostOwner, loadExplorePage, postComment, PROJECT_ROOT,
+  getPostOwner, loadExplorePage, postComment, getLikeCount, PROJECT_ROOT,
 } from "./helpers";
 import type { AutocommentHashtagResult } from "./types";
 import dotenv from "dotenv";
@@ -78,6 +78,7 @@ if (hashtagList.length === 0) {
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
         const MAX_ROUNDS = 5;
+        const MAX_LIKES = 100;
 
         for (let round = 1; round <= MAX_ROUNDS && hashtagCommented < commentCount; round++) {
           const postPaths = await loadExplorePage(page, hashtag, "explore/tags");
@@ -148,16 +149,22 @@ if (hashtagList.length === 0) {
             await dismissDialogByText(page, ["not now", "cancel"]);
 
             const owner = await getPostOwner(page);
-            const commentText = await getAIComment(page);
-            await postComment(page, commentText);
 
-            hashtagCommented++;
-            totalCommented++;
-            consecutiveFailures = 0;
-            comments.push(commentText);
-            console.log(
-              `  Post ${visitedPaths.size}: commented on @${owner || "unknown"} "${commentText}" (${hashtagCommented}/${commentCount} for #${hashtag})`
-            );
+            const postLikes = await getLikeCount(page);
+            if (postLikes !== null && postLikes >= MAX_LIKES) {
+              console.log(`  Post ${visitedPaths.size}: @${owner || "unknown"} has ${postLikes} likes (>=${MAX_LIKES}), skipping.`);
+            } else {
+              const commentText = await getAIComment(page);
+              await postComment(page, commentText);
+
+              hashtagCommented++;
+              totalCommented++;
+              consecutiveFailures = 0;
+              comments.push(commentText);
+              console.log(
+                `  Post ${visitedPaths.size}: commented on @${owner || "unknown"} "${commentText}" (${hashtagCommented}/${commentCount} for #${hashtag})`
+              );
+            }
 
             if (usedLightbox) {
               await page.keyboard.press("Escape");

@@ -62,6 +62,7 @@ if (locationList.length === 0) {
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
         const MAX_ROUNDS = 5;
+        const MAX_LIKES = 100;
 
         for (let round = 1; round <= MAX_ROUNDS && locationLiked < likeCount; round++) {
           const postPaths = await loadExplorePage(page, locationId, "explore/locations");
@@ -142,8 +143,8 @@ if (locationList.length === 0) {
               console.log(`  Post ${visitedPaths.size}: already liked @${owner || "unknown"}, advancing.`);
             } else {
               const postLikes = await getLikeCount(page);
-              if (postLikes !== null && postLikes >= 100) {
-                console.log(`  Post ${visitedPaths.size}: @${owner || "unknown"} has ${postLikes} likes (>=100), skipping.`);
+              if (postLikes !== null && postLikes >= MAX_LIKES) {
+                console.log(`  Post ${visitedPaths.size}: @${owner || "unknown"} has ${postLikes} likes (>=${MAX_LIKES}), skipping.`);
               } else {
                 await page.evaluate(() => {
                   const likeSvg = document.querySelector('section svg[aria-label="Like"]');
