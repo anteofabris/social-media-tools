@@ -16,7 +16,7 @@ async function graphGet<T>(
 
   // Facebook Graph API needs un-encoded parentheses in the fields parameter
   let urlStr = url.toString();
-  urlStr = urlStr.replace(/%28/g, "(").replace(/%29/g, ")").replace(/%40/g, "@");
+  urlStr = urlStr.replace(/%28/g, "(").replace(/%29/g, ")").replace(/%40/g, "@").replace(/%7B/g, "{").replace(/%7D/g, "}");
 
   return withBackoff(
     async () => {
@@ -62,7 +62,7 @@ export interface MediaItem {
 }
 
 const MEDIA_FIELDS =
-  "id,caption,media_type,permalink,timestamp,like_count,comments_count,username";
+  "id,caption,media_type,permalink,timestamp,like_count,comments_count";
 
 export async function getTopMedia(
   hashtagId: string,
@@ -102,6 +102,23 @@ export async function getRecentMedia(
   }
 }
 
+// ── media owner lookup ──────────────────────────────────────────────────────
+
+export async function getMediaOwner(mediaId: string): Promise<string | null> {
+  try {
+    const data = await graphGet<{ username?: string }>(
+      `/${mediaId}`,
+      { fields: "username" },
+    );
+    return data.username ?? null;
+  } catch (err) {
+    logger.warn(
+      `Media owner lookup failed for ${mediaId}: ${(err as Error).message}`,
+    );
+    return null;
+  }
+}
+
 // ── business discovery ──────────────────────────────────────────────────────
 
 export interface AccountInfo {
@@ -130,7 +147,7 @@ export async function getAccountInfo(
   username: string,
 ): Promise<AccountInfo | null> {
   try {
-    const fieldsValue = `business_discovery.fields(${BD_FIELDS}).username(${username})`;
+    const fieldsValue = `business_discovery.username(${username}){${BD_FIELDS}}`;
     const data = await graphGet<{ business_discovery?: AccountInfo }>(
       `/${config.igUserId}`,
       { fields: fieldsValue },

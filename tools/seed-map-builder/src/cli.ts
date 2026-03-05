@@ -16,6 +16,7 @@ import {
   searchHashtag,
   getTopMedia,
   getRecentMedia,
+  getMediaOwner,
   getAccountInfo,
 } from "./api/instagram";
 import { classifyHeuristic } from "./classify/heuristics";
@@ -106,6 +107,24 @@ async function runIngest(): Promise<void> {
     logger.info(
       `Found ${topMedia.length} top + ${recentMedia.length} recent media`,
     );
+
+    // Resolve usernames via individual media lookups
+    const allMedia = [...topMedia, ...recentMedia];
+    const mediaWithoutUsername = allMedia.filter((m) => !m.username && m.id);
+    if (mediaWithoutUsername.length > 0) {
+      logger.info(`Resolving usernames for ${mediaWithoutUsername.length} media items...`);
+      await Promise.all(
+        mediaWithoutUsername.map((media) =>
+          limit(async () => {
+            const owner = await getMediaOwner(media.id);
+            if (owner) media.username = owner;
+          }),
+        ),
+      );
+      const resolved = allMedia.filter((m) => m.username).length;
+      const unresolved = allMedia.length - resolved;
+      logger.info(`Username resolution: ${resolved} resolved, ${unresolved} failed`);
+    }
 
     // Extract unique usernames with their source info
     const usernameMap = new Map<

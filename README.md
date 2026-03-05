@@ -185,7 +185,7 @@ npm run seed-map -- run --dryRun --maxHashtags=1
 npm run seed-map -- run --hashtags=artmusic,psychedelicfunk
 
 # Run with defaults from hashtags.txt
-npm run seed-map -- run --maxHashtags=5 --topN=20 --recentN=20
+    npm run seed-map -- run --maxHashtags=5 --topN=20 --recentN=20
 
 # Force re-classification (ignore Gemini cache)
 npm run seed-map -- run --hashtags=shoegaze --force
