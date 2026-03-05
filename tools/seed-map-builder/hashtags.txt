@@ -2,40 +2,41 @@
 # Lines starting with # are comments
 
 # Genre tags
-noiserock
-noisemusic
-alternativejazz
-altjazz
-acidjazz
-experimentaljazz
-undergroundjazz
+# noiserock
+# noisemusic
+# alternativejazz
+# altjazz
+# acidjazz
+# experimentaljazz
+# undergroundjazz
 indiejazz
-ambientjazz
-avantjazz
-darkjazz
-psychedelicjazz
-alternativefunk
+# ambientjazz
+# avantjazz
+# darkjazz
+# psychedelicjazz
+# alternativefunk
 altfunk
-acidfunk
-experimentalfunk
-undergroundfunk
-indiefunk
-ambientfunk
-avantfunk
-psychedelicfunk
-experimentalpunk
-artpunk
-arthouse
+# acidfunk
+# experimentalfunk
+# undergroundfunk
+# indiefunk
+# ambientfunk
+# avantfunk
+# psychedelicfunk
+# experimentalpunk
+# artpunk
+# arthouse
 experimentalmusic
-psychedelicmusic
-videoart
-experimentalfilm
-experimentalvideo
-shoegaze
-triphop
-contemporaryart
-indierock
-shoegaze
+# psychedelicmusic
+
+# videoart
+# experimentalfilm
+# experimentalvideo
+# shoegaze
+# triphop
+# contemporaryart
+# indierock
+
 dreampop
 postpunk
 synthwave
