@@ -67,7 +67,7 @@ async function extractPostData(page: Page): Promise<{ imageBase64: string | null
 
 async function generateComment(imageBase64: string | null, captionText: string | null): Promise<string | null> {
   const prompt =
-    "Write a very short, casual Instagram comment (3 to 7 words). Relate it to the image and/or caption. No hashtags. Do not use exclamation points, quotation marks or apostrophes. Keep it friendly, and make it vague yet intriguing. Reply with ONLY the comment.";
+    "Write a very short, casual Instagram comment (3 to 7 words). Relate it to the image and/or caption. No hashtags. Do not use exclamation points, quotation marks or apostrophes. Keep it friendly. Make it complimentary and fun. Reply with ONLY the comment.";
 
   const parts: Array<{ inlineData: { mimeType: string; data: string } } | { text: string }> = [];
 
