@@ -16,7 +16,7 @@ import {
   searchHashtag,
   getTopMedia,
   getRecentMedia,
-  getMediaOwner,
+  resolveUsernameFromPermalink,
   getAccountInfo,
 } from "./api/instagram";
 import { classifyHeuristic } from "./classify/heuristics";
@@ -108,15 +108,15 @@ async function runIngest(): Promise<void> {
       `Found ${topMedia.length} top + ${recentMedia.length} recent media`,
     );
 
-    // Resolve usernames via individual media lookups
+    // Resolve usernames by scraping permalink pages
     const allMedia = [...topMedia, ...recentMedia];
-    const mediaWithoutUsername = allMedia.filter((m) => !m.username && m.id);
-    if (mediaWithoutUsername.length > 0) {
-      logger.info(`Resolving usernames for ${mediaWithoutUsername.length} media items...`);
+    const mediaToResolve = allMedia.filter((m) => !m.username && m.permalink);
+    if (mediaToResolve.length > 0) {
+      logger.info(`Resolving usernames for ${mediaToResolve.length} media items via permalinks...`);
       await Promise.all(
-        mediaWithoutUsername.map((media) =>
+        mediaToResolve.map((media) =>
           limit(async () => {
-            const owner = await getMediaOwner(media.id);
+            const owner = await resolveUsernameFromPermalink(media.permalink!);
             if (owner) media.username = owner;
           }),
         ),

@@ -102,18 +102,54 @@ export async function getRecentMedia(
   }
 }
 
-// ── media owner lookup ──────────────────────────────────────────────────────
+// ── media owner lookup (permalink scrape) ───────────────────────────────────
 
-export async function getMediaOwner(mediaId: string): Promise<string | null> {
+/**
+ * Resolves the username that owns a media item by fetching its permalink.
+ * Instagram serves og:description meta tags to crawlers, which include the
+ * author username — no authentication required.
+ */
+export async function resolveUsernameFromPermalink(
+  permalink: string,
+): Promise<string | null> {
   try {
-    const data = await graphGet<{ username?: string }>(
-      `/${mediaId}`,
-      { fields: "username" },
+    const res = await fetch(permalink, {
+      headers: {
+        // Identify as Facebook's crawler so Instagram returns full OG meta tags
+        "User-Agent": "facebookexternalhit/1.1",
+        "Accept": "text/html",
+      },
+      redirect: "follow",
+    });
+
+    if (!res.ok) {
+      logger.warn(`Permalink fetch returned ${res.status} for ${permalink}`);
+      return null;
+    }
+
+    const html = await res.text();
+
+    // Pattern 1: og:description — "N Likes, N Comments - @username on Instagram: …"
+    const descMatch = html.match(
+      /<meta[^>]+property="og:description"[^>]+content="[^"]*?@([a-zA-Z0-9._]+)\s+on\s+Instagram/i,
     );
-    return data.username ?? null;
+    if (descMatch) return descMatch[1];
+
+    // Pattern 2: "username":"value" in embedded JSON-LD / shared data
+    const jsonMatch = html.match(/"username"\s*:\s*"([a-zA-Z0-9._]+)"/);
+    if (jsonMatch) return jsonMatch[1];
+
+    // Pattern 3: og:title — "Username on Instagram: …"
+    const titleMatch = html.match(
+      /<meta[^>]+property="og:title"[^>]+content="@?([a-zA-Z0-9._]+)\s+on\s+Instagram/i,
+    );
+    if (titleMatch) return titleMatch[1];
+
+    logger.warn(`Could not extract username from permalink HTML: ${permalink}`);
+    return null;
   } catch (err) {
     logger.warn(
-      `Media owner lookup failed for ${mediaId}: ${(err as Error).message}`,
+      `Permalink lookup failed for ${permalink}: ${(err as Error).message}`,
     );
     return null;
   }
