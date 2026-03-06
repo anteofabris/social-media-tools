@@ -180,8 +180,21 @@ export async function getFollowerCount(page: Page, username: string): Promise<nu
       try {
         const resp = await fetch(`https://www.instagram.com/${user}/`, { credentials: "include" });
         const html = await resp.text();
-        const match = html.match(/([\d,]+)\s+Followers/i);
-        if (match) return parseInt(match[1].replace(/,/g, ""), 10);
+
+        // Match abbreviated counts like "15K", "1.2M", "500" followed by "Followers"
+        const match = html.match(/([\d,.]+[KMB]?)\s+Followers/i);
+        if (!match) return null;
+
+        const raw = match[1].replace(/,/g, "");
+        const m = raw.match(/^([\d.]+)([KMB]?)$/i);
+        if (!m) return null;
+
+        const num = parseFloat(m[1]);
+        const suffix = m[2].toUpperCase();
+        if (suffix === "K") return Math.round(num * 1_000);
+        if (suffix === "M") return Math.round(num * 1_000_000);
+        if (suffix === "B") return Math.round(num * 1_000_000_000);
+        return Math.round(num);
       } catch { /* ignore */ }
       return null;
     }, username);

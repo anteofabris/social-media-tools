@@ -32,7 +32,8 @@ if (locationList.length === 0) {
 
 const MS_PER_DAY = 86400000;
 const COOLDOWN_DAYS = 180;
-const MAX_FOLLOWERS = 10000;
+const MIN_FOLLOWERS = Number(process.env.AUTOFOLLOW_MIN_FOLLOWERS) || 500;
+const MAX_FOLLOWERS = Number(process.env.AUTOFOLLOW_MAX_FOLLOWERS) || 15000;
 let accountsList = loadAccountsProcessed();
 const accountsMap = new Map<string, AccountEntry>();
 for (const entry of accountsList) {
@@ -173,8 +174,8 @@ for (const entry of accountsList) {
 
             if (owner) {
               const followerCount = await getFollowerCount(page, owner);
-              if (followerCount !== null && followerCount >= MAX_FOLLOWERS) {
-                console.log(`  Post ${visitedPaths.size}: @${owner} has ${followerCount.toLocaleString()} followers (>= ${MAX_FOLLOWERS.toLocaleString()}), skipping.`);
+              if (followerCount !== null && (followerCount < MIN_FOLLOWERS || followerCount > MAX_FOLLOWERS)) {
+                console.log(`  Post ${visitedPaths.size}: @${owner} has ${followerCount.toLocaleString()} followers (outside ${MIN_FOLLOWERS.toLocaleString()}–${MAX_FOLLOWERS.toLocaleString()} range), skipping.`);
                 if (usedLightbox) {
                   await page.keyboard.press("Escape");
                   await randomDelay(1000, 2000);
