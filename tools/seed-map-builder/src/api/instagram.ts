@@ -155,6 +155,78 @@ export async function resolveUsernameFromPermalink(
   }
 }
 
+// ── profile scrape (follower count) ─────────────────────────────────────────
+
+/**
+ * Fetches an Instagram profile page and extracts the follower count from
+ * the server-rendered HTML. Works for public profiles regardless of whether
+ * they are business/creator accounts.
+ */
+export async function scrapeFollowerCount(
+  username: string,
+): Promise<number | null> {
+  try {
+    const res = await fetch(`https://www.instagram.com/${username}/`, {
+      headers: {
+        "User-Agent": "facebookexternalhit/1.1",
+        "Accept": "text/html",
+      },
+      redirect: "follow",
+    });
+
+    if (!res.ok) {
+      logger.warn(`Profile fetch returned ${res.status} for @${username}`);
+      return null;
+    }
+
+    const html = await res.text();
+
+    // Pattern 1: "edge_followed_by":{"count":12345}
+    const edgeMatch = html.match(/"edge_followed_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)/);
+    if (edgeMatch) return parseInt(edgeMatch[1], 10);
+
+    // Pattern 2: "follower_count":12345
+    const fcMatch = html.match(/"follower_count"\s*:\s*(\d+)/);
+    if (fcMatch) return parseInt(fcMatch[1], 10);
+
+    // Pattern 3: og:description — "12.3K Followers, 456 Following, 78 Posts"
+    const ogMatch = html.match(
+      /<meta[^>]+property="og:description"[^>]+content="([^"]+)"/i,
+    );
+    if (ogMatch) {
+      const descText = ogMatch[1];
+      const followersMatch = descText.match(/([\d,.]+[KMB]?)\s+Followers/i);
+      if (followersMatch) {
+        return parseShortNumber(followersMatch[1]);
+      }
+    }
+
+    // Pattern 4: "userInteractionCount":"12345" (JSON-LD)
+    const ldMatch = html.match(/"userInteractionCount"\s*:\s*"?(\d+)"?/);
+    if (ldMatch) return parseInt(ldMatch[1], 10);
+
+    logger.warn(`Could not extract follower count from profile page for @${username}`);
+    return null;
+  } catch (err) {
+    logger.warn(
+      `Profile scrape failed for @${username}: ${(err as Error).message}`,
+    );
+    return null;
+  }
+}
+
+function parseShortNumber(s: string): number {
+  const cleaned = s.replace(/,/g, "");
+  const match = cleaned.match(/^([\d.]+)([KMB]?)$/i);
+  if (!match) return NaN;
+  const num = parseFloat(match[1]);
+  const suffix = match[2].toUpperCase();
+  if (suffix === "K") return Math.round(num * 1_000);
+  if (suffix === "M") return Math.round(num * 1_000_000);
+  if (suffix === "B") return Math.round(num * 1_000_000_000);
+  return Math.round(num);
+}
+
 // ── business discovery ──────────────────────────────────────────────────────
 
 export interface AccountInfo {

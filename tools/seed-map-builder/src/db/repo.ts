@@ -155,7 +155,8 @@ export function getEligibleSeeds(
        JOIN classifications c ON c.account_id = a.id
        WHERE c.category != 'other'
          AND c.confidence >= ?
-         AND (a.followers IS NULL OR (a.followers >= ? AND a.followers <= ?))
+         AND a.followers IS NOT NULL
+         AND a.followers >= ? AND a.followers <= ?
          AND c.classified_at = (
            SELECT MAX(c2.classified_at) FROM classifications c2 WHERE c2.account_id = a.id
          )

@@ -18,10 +18,13 @@ import {
   getRecentMedia,
   resolveUsernameFromPermalink,
   getAccountInfo,
+  scrapeFollowerCount,
 } from "./api/instagram";
 import { classifyHeuristic } from "./classify/heuristics";
 import { classifyWithGemini } from "./classify/gemini";
 import { exportSeedMaps } from "./export/exportJson";
+import { exportSeedMapsCsv } from "./export/exportCsv";
+import { exportMasterCsv } from "./export/exportMasterCsv";
 import { logger } from "./util/logger";
 import { pLimit, waitForSleepWindowEnd } from "./util/time";
 
@@ -147,6 +150,9 @@ async function runIngest(): Promise<void> {
 
     logger.info(`Unique candidate accounts: ${usernameMap.size}`);
 
+    let skippedNoFollowers = 0;
+    let skippedOutOfRange = 0;
+
     const tasks = [...usernameMap.entries()].map(([username, meta]) =>
       limit(async () => {
         await waitForSleepWindowEnd();
@@ -155,11 +161,33 @@ async function runIngest(): Promise<void> {
         const info = await getAccountInfo(username);
         const accountId = info?.ig_id || username;
 
+        // Resolve follower count: business_discovery first, profile scrape fallback
+        let followers = info?.followers_count ?? null;
+        if (followers == null) {
+          followers = await scrapeFollowerCount(username);
+        }
+
+        // Skip accounts where we couldn't determine follower count
+        if (followers == null) {
+          logger.info(`@${username}: skipped — could not determine follower count`);
+          skippedNoFollowers++;
+          return;
+        }
+
+        // Skip accounts outside the configured follower range
+        if (followers < config.followerMin || followers > config.followerMax) {
+          logger.info(
+            `@${username}: skipped — ${followers.toLocaleString()} followers (outside ${config.followerMin.toLocaleString()}–${config.followerMax.toLocaleString()} range)`,
+          );
+          skippedOutOfRange++;
+          return;
+        }
+
         upsertAccount({
           id: accountId,
           username,
           name: info?.name,
-          followers: info?.followers_count,
+          followers,
           bio: info?.biography,
           website: info?.website,
         });
@@ -230,6 +258,12 @@ async function runIngest(): Promise<void> {
     );
 
     await Promise.all(tasks);
+
+    if (skippedNoFollowers > 0 || skippedOutOfRange > 0) {
+      logger.info(
+        `Skipped: ${skippedNoFollowers} (no follower count) + ${skippedOutOfRange} (outside range)`,
+      );
+    }
   }
 
   const stats = {
@@ -290,6 +324,16 @@ function printStats(): void {
         exportSeedMaps();
         break;
 
+      case "export-csv":
+        initDb();
+        exportSeedMapsCsv();
+        break;
+
+      case "export-master":
+        initDb();
+        exportMasterCsv();
+        break;
+
       case "stats":
         initDb();
         printStats();
@@ -300,7 +344,9 @@ function printStats(): void {
         console.error("Commands:");
         console.error("  init     Create SQLite DB and tables");
         console.error("  run      Ingest hashtags, fetch media, classify accounts");
-        console.error("  export   Write JSON seed maps to output/");
+        console.error("  export       Write JSON seed maps to output/");
+        console.error("  export-csv    Write CSV seed maps to output/");
+        console.error("  export-master Write master CSV (all categories) to output/");
         console.error("  stats    Print counts and confidence summary\n");
         console.error("Run flags:");
         console.error("  --hashtags=tag1,tag2   Comma-separated hashtags");
