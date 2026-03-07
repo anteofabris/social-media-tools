@@ -98,6 +98,21 @@ console.log(
       console.log(`\n--- Hashtag: #${hashtag} ---`);
       let hashtagInteracted = 0;
       const accountDetails: AutointeractHashtagResult["details"][0]["accounts"] = [];
+      const HASHTAG_RETRIES = 3;
+      let lastHashtagError: string | undefined;
+
+      for (let attempt = 1; attempt <= HASHTAG_RETRIES; attempt++) {
+        if (attempt > 1) {
+          console.log(`  Retry ${attempt}/${HASHTAG_RETRIES} for #${hashtag}...`);
+          try {
+            ({ browser, page } = await ensureConnection(browser, page, cookie));
+          } catch (reconnErr: unknown) {
+            const reconnMsg = reconnErr instanceof Error ? reconnErr.message : String(reconnErr);
+            console.log(`  Cannot recover connection: ${reconnMsg}. Giving up on #${hashtag}.`);
+            break;
+          }
+          await randomDelay(2000, 4000);
+        }
 
       try {
         const visitedPaths = new Set<string>();
@@ -460,12 +475,26 @@ console.log(
         }
 
         console.log(`  Finished #${hashtag}: ${hashtagInteracted} accounts interacted.`);
-        result.details.push({ hashtag, interacted: hashtagInteracted, accounts: accountDetails });
+        lastHashtagError = undefined;
+        break; // success — exit retry loop
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.log(`  Error processing #${hashtag}: ${msg}. Skipping.`);
-        result.details.push({ hashtag, interacted: hashtagInteracted, accounts: accountDetails, error: msg });
+        lastHashtagError = msg;
+
+        if (attempt < HASHTAG_RETRIES) {
+          console.log(`  Error processing #${hashtag}: ${msg}. Will retry...`);
+        } else {
+          console.log(`  Error processing #${hashtag}: ${msg}. No retries left, skipping.`);
+        }
       }
+      } // end retry loop
+
+      result.details.push({
+        hashtag,
+        interacted: hashtagInteracted,
+        accounts: accountDetails,
+        ...(lastHashtagError ? { error: lastHashtagError } : {}),
+      });
     }
   } catch (err: unknown) {
     result.success = false;
