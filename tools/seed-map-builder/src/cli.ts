@@ -1,5 +1,6 @@
 import minimist from "minimist";
 import fs from "fs";
+import path from "path";
 import crypto from "crypto";
 import { config } from "./config";
 import {
@@ -11,6 +12,8 @@ import {
   addSource,
   upsertClassification,
   hasRecentGeminiClassification,
+  upsertHashtag,
+  getAllHashtags,
 } from "./db/repo";
 import {
   searchHashtag,
@@ -101,6 +104,7 @@ async function runIngest(): Promise<void> {
       continue;
     }
     logger.info(`Hashtag ID for #${tag}: ${hashtagId}`);
+    upsertHashtag(tag, hashtagId);
 
     const [topMedia, recentMedia] = await Promise.all([
       getTopMedia(hashtagId, topN),
@@ -280,6 +284,26 @@ async function runIngest(): Promise<void> {
 
 // ── stats command ───────────────────────────────────────────────────────────
 
+function exportHashtagsCsv(): void {
+  const hashtags = getAllHashtags();
+
+  if (!fs.existsSync(config.outputDir)) {
+    fs.mkdirSync(config.outputDir, { recursive: true });
+  }
+
+  const header = "name,ig_id,first_seen,last_used";
+  const rows = [
+    header,
+    ...hashtags.map((h) =>
+      [h.name, h.ig_id, h.first_seen, h.last_used].join(","),
+    ),
+  ];
+
+  const filePath = path.join(config.outputDir, "hashtags.csv");
+  fs.writeFileSync(filePath, rows.join("\n") + "\n", "utf-8");
+  logger.info(`Exported ${hashtags.length} hashtags -> hashtags.csv`);
+}
+
 function printStats(): void {
   const stats = getStats();
   console.log("\n=== Seed Map Statistics ===\n");
@@ -334,6 +358,11 @@ function printStats(): void {
         exportMasterCsv();
         break;
 
+      case "export-hashtags":
+        initDb();
+        exportHashtagsCsv();
+        break;
+
       case "stats":
         initDb();
         printStats();
@@ -346,8 +375,9 @@ function printStats(): void {
         console.error("  run      Ingest hashtags, fetch media, classify accounts");
         console.error("  export       Write JSON seed maps to output/");
         console.error("  export-csv    Write CSV seed maps to output/");
-        console.error("  export-master Write master CSV (all categories) to output/");
-        console.error("  stats    Print counts and confidence summary\n");
+        console.error("  export-master    Write master CSV (all categories) to output/");
+        console.error("  export-hashtags  Write hashtag ID lookup table to output/");
+        console.error("  stats            Print counts and confidence summary\n");
         console.error("Run flags:");
         console.error("  --hashtags=tag1,tag2   Comma-separated hashtags");
         console.error("  --maxHashtags=N        Limit hashtags to process");

@@ -67,6 +67,32 @@ export function getAccountById(id: string): {
   return getDb().prepare("SELECT * FROM accounts WHERE id = ?").get(id) as ReturnType<typeof getAccountById>;
 }
 
+// ── hashtags ────────────────────────────────────────────────────────────────
+
+export function upsertHashtag(name: string, igId: string): void {
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO hashtags (name, ig_id, first_seen, last_used)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET
+         ig_id = excluded.ig_id,
+         last_used = excluded.last_used`,
+    )
+    .run(name, igId, now, now);
+}
+
+export function getAllHashtags(): Array<{
+  name: string;
+  ig_id: string;
+  first_seen: string;
+  last_used: string;
+}> {
+  return getDb()
+    .prepare("SELECT name, ig_id, first_seen, last_used FROM hashtags ORDER BY name")
+    .all() as Array<{ name: string; ig_id: string; first_seen: string; last_used: string }>;
+}
+
 // ── sources ─────────────────────────────────────────────────────────────────
 
 export function addSource(accountId: string, sourceType: string, hashtag: string): void {

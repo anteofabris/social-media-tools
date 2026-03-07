@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS classifications (
   FOREIGN KEY (account_id) REFERENCES accounts(id)
 );
 
+CREATE TABLE IF NOT EXISTS hashtags (
+  name TEXT PRIMARY KEY,
+  ig_id TEXT NOT NULL,
+  first_seen TEXT NOT NULL,
+  last_used TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS runs (
   run_id TEXT PRIMARY KEY,
   started_at TEXT NOT NULL,

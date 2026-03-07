@@ -72,6 +72,27 @@ export interface AutocommentLocationResult {
   error: string | null;
 }
 
+export interface AutointeractHashtagResult {
+  success: boolean;
+  action: "autointeract_hashtags";
+  hashtags: string[];
+  requested: number;
+  totalInteracted: number;
+  details: {
+    hashtag: string;
+    interacted: number;
+    accounts: {
+      username: string;
+      followed: boolean;
+      postsLiked: number;
+      postsCommented: number;
+      comments: string[];
+    }[];
+    error?: string;
+  }[];
+  error: string | null;
+}
+
 export interface AutounfollowResult {
   success: boolean;
   action: "autounfollow";
