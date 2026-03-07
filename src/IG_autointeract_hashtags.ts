@@ -57,9 +57,17 @@ for (const entry of accountsList) {
   accountsMap.set(entry.accountName.toLowerCase(), entry);
 }
 
+const SCRIPT_TIMEOUT_MS = Number(process.env.AUTOINTERACT_TIMEOUT_MINUTES || 60) * 60_000;
+const scriptStartTime = Date.now();
+
+function isTimedOut(): boolean {
+  return Date.now() - scriptStartTime >= SCRIPT_TIMEOUT_MS;
+}
+
 console.log(
   `Config: follow=${shouldFollow}, numLikes=${numLikes}, numComments=${numComments}, ` +
-  `count=${interactCount}, followers=${MIN_FOLLOWERS.toLocaleString()}–${MAX_FOLLOWERS.toLocaleString()}`
+  `count=${interactCount}, followers=${MIN_FOLLOWERS.toLocaleString()}–${MAX_FOLLOWERS.toLocaleString()}, ` +
+  `timeout=${SCRIPT_TIMEOUT_MS / 60_000}min`
 );
 
 (async () => {
@@ -95,13 +103,24 @@ console.log(
     console.log("Logged in via session cookie.");
 
     for (const hashtag of hashtagList) {
+      if (isTimedOut()) {
+        console.log(`\nScript timeout reached (${SCRIPT_TIMEOUT_MS / 60_000}min). Stopping all hashtags.`);
+        break;
+      }
       console.log(`\n--- Hashtag: #${hashtag} ---`);
       let hashtagInteracted = 0;
       const accountDetails: AutointeractHashtagResult["details"][0]["accounts"] = [];
       const HASHTAG_RETRIES = 3;
       let lastHashtagError: string | undefined;
+      const visitedPaths = new Set<string>();
+      const processedOwners = new Set<string>();
 
       for (let attempt = 1; attempt <= HASHTAG_RETRIES; attempt++) {
+        if (isTimedOut()) {
+          console.log(`  Script timeout reached (${SCRIPT_TIMEOUT_MS / 60_000}min). Stopping.`);
+          break;
+        }
+
         if (attempt > 1) {
           console.log(`  Retry ${attempt}/${HASHTAG_RETRIES} for #${hashtag}...`);
           try {
@@ -115,13 +134,11 @@ console.log(
         }
 
       try {
-        const visitedPaths = new Set<string>();
-        const processedOwners = new Set<string>();
         let consecutiveFailures = 0;
         const FAILURE_LIMIT = 10;
         const MAX_ROUNDS = 5;
 
-        for (let round = 1; round <= MAX_ROUNDS && hashtagInteracted < interactCount; round++) {
+        for (let round = 1; round <= MAX_ROUNDS && hashtagInteracted < interactCount && !isTimedOut(); round++) {
           const postPaths = await loadExplorePage(page, hashtag, "explore/tags");
 
           if (postPaths.length === 0) {
@@ -143,7 +160,7 @@ console.log(
 
           let onExplorePage = true;
 
-          for (let i = 0; i < paths.length && hashtagInteracted < interactCount; i++) {
+          for (let i = 0; i < paths.length && hashtagInteracted < interactCount && !isTimedOut(); i++) {
             const postPath = paths[i];
             visitedPaths.add(postPath);
 
