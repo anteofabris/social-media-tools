@@ -283,7 +283,7 @@ console.log(
               // Navigate to profile
               console.log(`  Post ${visitedPaths.size}: navigating to @${owner}'s profile${followerCount !== null ? ` (${followerCount.toLocaleString()} followers)` : ""}...`);
               await page.goto(`https://www.instagram.com/${owner}/`, { waitUntil: "networkidle2" });
-              await randomDelay(2000, 3000);
+              await randomDelay(3000, 8000);
 
               await dismissDialogByText(page, ["not now", "cancel"]);
 
@@ -309,28 +309,9 @@ console.log(
                     const profilePostPath = postsToVisit[j];
 
                     try {
-                      // Click post to open lightbox
-                      const postClicked = await page.evaluate((pp: string) => {
-                        const link = document.querySelector(`a[href="${pp}"]`);
-                        if (!link) return false;
-                        (link as HTMLElement).click();
-                        return true;
-                      }, profilePostPath);
-
-                      if (!postClicked) continue;
-
-                      try {
-                        await page.waitForFunction(
-                          () => !!document.querySelector('[role="dialog"] article'),
-                          { timeout: 8000 }
-                        );
-                      } catch {
-                        // Might have navigated instead of lightbox
-                        await page.goto(`https://www.instagram.com/${owner}/`, { waitUntil: "networkidle2" });
-                        await randomDelay(1000, 2000);
-                        continue;
-                      }
-                      await randomDelay(1000, 2000);
+                      // Navigate directly to the post page
+                      await page.goto(`https://www.instagram.com${profilePostPath}`, { waitUntil: "networkidle2" });
+                      await randomDelay(3000, 7000);
 
                       await dismissDialogByText(page, ["not now", "cancel"]);
 
@@ -338,9 +319,6 @@ console.log(
                       const postLikes = await getLikeCount(page);
                       if (postLikes !== null && postLikes >= MAX_LIKES) {
                         console.log(`    @${owner} post ${j + 1}: ${postLikes} likes (>=${MAX_LIKES}), skipping.`);
-                        await page.keyboard.press("Escape");
-                        await randomDelay(1000, 2000);
-                        try { await page.waitForFunction(() => !document.querySelector('[role="dialog"] article'), { timeout: 5000 }); } catch { /* ignore */ }
                         await randomDelay();
                         continue;
                       }
@@ -363,6 +341,7 @@ console.log(
                         });
                         postsLiked++;
                         console.log(`    @${owner} post ${j + 1}: liked (${postsLiked}/${numLikes})`);
+                        await randomDelay(2000, 6000);
 
                         // Comment on this post if within numComments budget
                         if (postsCommented < numComments) {
@@ -379,25 +358,10 @@ console.log(
                         }
                       }
 
-                      // Close lightbox
-                      await page.keyboard.press("Escape");
-                      await randomDelay(1000, 2000);
-                      try {
-                        await page.waitForFunction(
-                          () => !document.querySelector('[role="dialog"] article'),
-                          { timeout: 5000 }
-                        );
-                      } catch { /* ignore */ }
-
-                      await randomDelay();
+                      await randomDelay(5000, 15000);
                     } catch (postErr: unknown) {
                       const pmsg = postErr instanceof Error ? postErr.message : String(postErr);
                       console.log(`    @${owner} post ${j + 1}: error — ${pmsg}`);
-                      // Try to recover to profile page
-                      try {
-                        await page.goto(`https://www.instagram.com/${owner}/`, { waitUntil: "networkidle2" });
-                        await randomDelay(1000, 2000);
-                      } catch { /* ignore */ }
                     }
                   }
                 }
@@ -408,12 +372,10 @@ console.log(
               let didFollow = false;
 
               if (shouldFollow) {
-                // Navigate back to profile if we were on a post page
-                const currentUrl = page.url();
-                if (!currentUrl.includes(`/${owner}`)) {
-                  await page.goto(`https://www.instagram.com/${owner}/`, { waitUntil: "networkidle2" });
-                  await randomDelay(1000, 2000);
-                }
+                // Navigate to profile page for following
+                await page.goto(`https://www.instagram.com/${owner}/`, { waitUntil: "networkidle2" });
+                await randomDelay(3000, 7000);
+                await dismissDialogByText(page, ["not now", "cancel"]);
 
                 const followResult = await page.evaluate(() => {
                   const buttons = [...document.querySelectorAll("button")];
@@ -465,7 +427,7 @@ console.log(
                 `  @${owner}: done — liked ${postsLiked}, commented ${postsCommented}, followed ${didFollow} (${hashtagInteracted}/${interactCount} for #${hashtag})`
               );
 
-              await randomDelay();
+              await randomDelay(10000, 45000);
             } catch (err: unknown) {
               consecutiveFailures++;
               const msg = err instanceof Error ? err.message : String(err);
@@ -486,7 +448,7 @@ console.log(
                 break;
               }
 
-              await randomDelay(2000, 3000);
+              await randomDelay(5000, 15000);
             }
           }
         }
